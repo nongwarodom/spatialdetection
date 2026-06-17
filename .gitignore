@@ -16,6 +16,9 @@ wheels/
 # macOS
 .DS_Store
 
+# Example script output
+quickstart_map.png
+
 # Vendored raw GIS source data (large, third-party, regenerable -- see data/raw/SOURCES.md)
 data/raw/*
 !data/raw/SOURCES.md

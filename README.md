@@ -13,33 +13,84 @@ geospatial dependency compatibility.
 uv sync
 ```
 
+Try the end-to-end example (no GeoDataFrame setup needed — see Usage below):
+
+```bash
+uv run python examples/quickstart.py
+```
+
 ## Usage
+
+Every clustering/autocorrelation function takes a plain `pandas.DataFrame`
+with `lon`/`lat` columns directly — no need to call `points_from_dataframe`
+yourself first. Pass `lon_col`/`lat_col` if your columns are named
+differently; pass an already-built `GeoDataFrame` instead and it's used as-is.
 
 ```python
 from spatialdetection import (
-    points_from_dataframe,
     dbscan_clusters,
     cluster_summary,
     morans_i,
     getis_ord_hotspots,
+    detect_province,
+    detect_district,
+    detect_subdistrict,
+    detect_point,
+    detect_level,
+    plot_level_map,
+    time_bin_label,
+    spatiotemporal_hotspots,
 )
 
-gdf = points_from_dataframe(df, lon_col="lon", lat_col="lat")
+# df is a plain DataFrame with "lon"/"lat" columns (e.g. from pd.read_csv)
 
 # Density-based cluster detection (eps in kilometers)
-labels = dbscan_clusters(gdf, eps_km=1.0, min_samples=5)
-summary = cluster_summary(gdf, labels)
+labels = dbscan_clusters(df, eps_km=1.0, min_samples=5)
+summary = cluster_summary(df, labels)
 
 # Spatial autocorrelation / hotspot detection on a value column
-moran = morans_i(gdf, value_col="value")
-hotspots = getis_ord_hotspots(gdf, value_col="value")
+moran = morans_i(df, value_col="value")
+hotspots = getis_ord_hotspots(df, value_col="value")
+
+# Detect a Thai admin P-code or a raw lat/lon point. Use the explicit
+# detect_* function when you know the input type, or detect_level to
+# auto-dispatch on a mix of P-codes and (lat, lon) pairs.
+province = detect_province("TH10")
+district = detect_district("TH1001")
+subdistrict = detect_subdistrict("TH100101")
+point = detect_point(13.7563, 100.5018)
+auto = detect_level("TH100101")  # -> same as detect_subdistrict here
+
+# Auto-plot a map zoomed to whatever level detect_level finds
+ax = plot_level_map("TH100101")
+ax = plot_level_map((13.7563, 100.5018))
+
+# Spatiotemporal hotspot detection: bin points by day/week/month and run
+# Getis-Ord Gi* independently within each bin, so a hotspot in one period
+# isn't diluted by activity in another.
+hotspots_by_week = spatiotemporal_hotspots(
+    df, time_col="observed_at", value_col="value", timeframe="week"
+)
 ```
+
+See `examples/quickstart.py` for a runnable version of this with synthetic
+data (DBSCAN, Moran's I, Getis-Ord Gi*, spatiotemporal hotspots, and an
+auto-plotted map, all from one plain DataFrame).
 
 ## Modules
 
 - `spatialdetection.io` — load points from CSV or vector files into a `GeoDataFrame`.
 - `spatialdetection.clustering` — DBSCAN clustering with a haversine metric over lon/lat.
 - `spatialdetection.autocorrelation` — Moran's I and Getis-Ord Gi* hotspot/coldspot detection.
+- `spatialdetection.detect` — classify a Thai P-code or lat/lon as
+  province/district/subdistrict/point. Pure lookup logic, no matplotlib
+  dependency: `detect_province`, `detect_district`, `detect_subdistrict`,
+  `detect_point`, and the auto-dispatching `detect_level`.
+- `spatialdetection.plotting` — `plot_level_map`, auto-zoomed/styled to
+  whatever level `detect_level` finds for its input.
+- `spatialdetection.spatiotemporal` — `time_bin_label` (day/week/month
+  bin labels for a timestamp column) and `spatiotemporal_hotspots`
+  (Getis-Ord Gi* run independently per time bin).
 
 ## Development
 

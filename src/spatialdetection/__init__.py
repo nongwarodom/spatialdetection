@@ -1,13 +1,32 @@
 from spatialdetection.autocorrelation import getis_ord_hotspots, knn_weights, morans_i
 from spatialdetection.clustering import cluster_summary, dbscan_clusters
+from spatialdetection.detect import (
+    LevelResult,
+    detect_district,
+    detect_level,
+    detect_point,
+    detect_province,
+    detect_subdistrict,
+)
 from spatialdetection.io import load_points, points_from_dataframe
+from spatialdetection.plotting import plot_level_map
+from spatialdetection.spatiotemporal import spatiotemporal_hotspots, time_bin_label
 
 __all__ = [
+    "LevelResult",
     "cluster_summary",
     "dbscan_clusters",
+    "detect_district",
+    "detect_level",
+    "detect_point",
+    "detect_province",
+    "detect_subdistrict",
     "getis_ord_hotspots",
     "knn_weights",
     "load_points",
     "morans_i",
+    "plot_level_map",
     "points_from_dataframe",
+    "spatiotemporal_hotspots",
+    "time_bin_label",
 ]
