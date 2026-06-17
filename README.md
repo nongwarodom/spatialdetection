@@ -27,6 +27,7 @@ yourself first. Pass `lon_col`/`lat_col` if your columns are named
 differently; pass an already-built `GeoDataFrame` instead and it's used as-is.
 
 ```python
+import pandas as pd
 from spatialdetection import (
     dbscan_clusters,
     cluster_summary,
@@ -52,14 +53,17 @@ summary = cluster_summary(df, labels)
 moran = morans_i(df, value_col="value")
 hotspots = getis_ord_hotspots(df, value_col="value")
 
-# Detect a Thai admin P-code or a raw lat/lon point. Use the explicit
-# detect_* function when you know the input type, or detect_level to
-# auto-dispatch on a mix of P-codes and (lat, lon) pairs.
+# Look up a Thai admin P-code -> location, or auto-dispatch with detect_level
+# on a mix of P-codes and (lat, lon) pairs.
 province = detect_province("TH10")
 district = detect_district("TH1001")
 subdistrict = detect_subdistrict("TH100101")
-point = detect_point(13.7563, 100.5018)
 auto = detect_level("TH100101")  # -> same as detect_subdistrict here
+
+# Reverse-geocode: location -> P-code. Takes a DataFrame of (lat, lon) rows
+# and spatially resolves each one to its containing province/district/
+# subdistrict in a single batch (points outside Thailand get null codes).
+located = detect_point(pd.DataFrame({"lat": [13.7563], "lon": [100.5018]}))
 
 # Auto-plot a map zoomed to whatever level detect_level finds
 ax = plot_level_map("TH100101")
@@ -82,10 +86,12 @@ auto-plotted map, all from one plain DataFrame).
 - `spatialdetection.io` — load points from CSV or vector files into a `GeoDataFrame`.
 - `spatialdetection.clustering` — DBSCAN clustering with a haversine metric over lon/lat.
 - `spatialdetection.autocorrelation` — Moran's I and Getis-Ord Gi* hotspot/coldspot detection.
-- `spatialdetection.detect` — classify a Thai P-code or lat/lon as
-  province/district/subdistrict/point. Pure lookup logic, no matplotlib
-  dependency: `detect_province`, `detect_district`, `detect_subdistrict`,
-  `detect_point`, and the auto-dispatching `detect_level`.
+- `spatialdetection.detect` — `detect_province`/`detect_district`/
+  `detect_subdistrict` resolve a Thai P-code to its location (code ->
+  location); `detect_point` is the inverse, reverse-geocoding a DataFrame of
+  (lat, lon) rows to their containing province/district/subdistrict
+  (location -> code) via a spatial join. `detect_level` auto-dispatches a
+  single P-code string or (lat, lon) pair.
 - `spatialdetection.plotting` — `plot_level_map`, auto-zoomed/styled to
   whatever level `detect_level` finds for its input.
 - `spatialdetection.spatiotemporal` — `time_bin_label` (day/week/month

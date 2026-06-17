@@ -1,3 +1,4 @@
+import pandas as pd
 import pytest
 
 from spatialdetection import (
@@ -26,12 +27,48 @@ def test_detect_subdistrict():
     assert result.level == "subdistrict"
 
 
-def test_detect_point():
-    result = detect_point(13.7563, 100.5018)
-    assert result.level == "point"
-    assert result.lat == pytest.approx(13.7563)
-    assert result.lon == pytest.approx(100.5018)
-    assert result.code is None
+def test_detect_point_reverse_geocodes_known_location():
+    # Centroid of subdistrict TH100101 (Phraborom Maharatchawang, Phra Nakhon, Bangkok).
+    df = pd.DataFrame({"lat": [13.751466582507641], "lon": [100.49223438698446]})
+
+    result = detect_point(df)
+
+    assert result.iloc[0]["subdistrict_code"] == "TH100101"
+    assert result.iloc[0]["district_code"] == "TH1001"
+    assert result.iloc[0]["province_code"] == "TH10"
+    assert result.iloc[0]["province_en"] == "Bangkok"
+
+
+def test_detect_point_handles_batch_of_rows():
+    df = pd.DataFrame(
+        {
+            "lat": [13.751466582507641, 13.7563],
+            "lon": [100.49223438698446, 100.5018],
+        }
+    )
+
+    result = detect_point(df)
+
+    assert len(result) == 2
+    assert result.iloc[0]["province_code"] == "TH10"
+    assert result.iloc[1]["province_code"] == "TH10"
+
+
+def test_detect_point_outside_thailand_is_null():
+    df = pd.DataFrame({"lat": [0.0], "lon": [0.0]})  # middle of the Atlantic, not Thailand
+
+    result = detect_point(df)
+
+    assert pd.isna(result.iloc[0]["subdistrict_code"])
+    assert pd.isna(result.iloc[0]["province_code"])
+
+
+def test_detect_point_accepts_custom_column_names():
+    df = pd.DataFrame({"y": [13.751466582507641], "x": [100.49223438698446]})
+
+    result = detect_point(df, lat_col="y", lon_col="x")
+
+    assert result.iloc[0]["subdistrict_code"] == "TH100101"
 
 
 def test_detect_province_rejects_wrong_format():

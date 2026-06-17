@@ -21,6 +21,7 @@ from spatialdetection import (
     cluster_summary,
     dbscan_clusters,
     detect_level,
+    detect_point,
     getis_ord_hotspots,
     morans_i,
     plot_level_map,
@@ -82,7 +83,12 @@ def main() -> None:
     print(f"detect_level('TH10') -> level={result.level}, lat={result.lat:.4f}, lon={result.lon:.4f}")
     ax = plot_level_map("TH10")
     ax.figure.savefig("quickstart_map.png", dpi=100)
-    print("Saved quickstart_map.png")
+    print("Saved quickstart_map.png\n")
+
+    # 5. Reverse-geocode the case locations: which subdistrict is each one in?
+    located = detect_point(df)
+    print("Reverse-geocoded case counts by subdistrict:")
+    print(located.groupby("subdistrict_en")["cases"].sum().sort_values(ascending=False).to_string())
 
 
 if __name__ == "__main__":

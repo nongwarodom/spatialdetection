@@ -1,7 +1,10 @@
-"""Detect the Thai administrative level of an input: P-code or raw lat/lon.
+"""Detect the Thai administrative level of an input: P-code, or reverse-geocode lat/lon.
 
-Pure lookup logic against `data/thailand_admin_centroids.json` — no plotting
-dependencies, so importing this module doesn't pull in matplotlib.
+`detect_province`/`detect_district`/`detect_subdistrict`/`detect_level` are
+pure lookups against `data/thailand_admin_centroids.json` (code -> location).
+`detect_point` is the inverse: it spatially joins a DataFrame of (lat, lon)
+points against the subdistrict boundary polygons to resolve which
+province/district/subdistrict each point falls inside (location -> code).
 """
 
 from __future__ import annotations
@@ -13,7 +16,14 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-_CENTROIDS_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "thailand_admin_centroids.json"
+import geopandas as gpd
+import pandas as pd
+
+from spatialdetection.io import _to_geodataframe
+
+_ROOT = Path(__file__).resolve().parent.parent.parent
+_CENTROIDS_PATH = _ROOT / "data" / "thailand_admin_centroids.json"
+_SUBDISTRICT_BOUNDARY_PATH = _ROOT / "data" / "raw" / "adm3_subdistrict" / "tha_admbnda_adm3_rtsd_20220121.shp"
 
 # Longest pattern first: an 8-digit code also matches a looser 4-digit regex.
 _PCODE_PATTERNS = [
@@ -25,10 +35,19 @@ _LOOKUP_KEYS = {"province": "province_code", "district": "district_code", "subdi
 _COLLECTIONS = {"province": "provinces", "district": "districts", "subdistrict": "subdistricts"}
 _LEVEL_PATTERN = {level: pattern for pattern, level in _PCODE_PATTERNS}
 
+_BOUNDARY_FIELD_RENAME = {
+    "ADM1_PCODE": "province_code",
+    "ADM1_EN": "province_en",
+    "ADM2_PCODE": "district_code",
+    "ADM2_EN": "district_en",
+    "ADM3_PCODE": "subdistrict_code",
+    "ADM3_EN": "subdistrict_en",
+}
+
 
 @dataclass
 class LevelResult:
-    """Outcome of a detect_* call."""
+    """Outcome of a detect_province/detect_district/detect_subdistrict/detect_level call."""
 
     level: str  # "province" | "district" | "subdistrict" | "point"
     code: str | None
@@ -41,6 +60,12 @@ class LevelResult:
 def _centroids() -> dict[str, Any]:
     with _CENTROIDS_PATH.open(encoding="utf-8") as f:
         return json.load(f)
+
+
+@lru_cache(maxsize=1)
+def _subdistrict_boundary() -> gpd.GeoDataFrame:
+    gdf = gpd.read_file(_SUBDISTRICT_BOUNDARY_PATH)
+    return gdf[list(_BOUNDARY_FIELD_RENAME) + ["geometry"]].rename(columns=_BOUNDARY_FIELD_RENAME)
 
 
 def _lookup(level: str, code: str) -> LevelResult:
@@ -77,18 +102,32 @@ def detect_subdistrict(code: str) -> LevelResult:
     return _lookup("subdistrict", _normalize_and_validate(code, "subdistrict"))
 
 
-def detect_point(lat: float, lon: float) -> LevelResult:
-    """Wrap a raw (lat, lon) pair as a `LevelResult` at "point" level."""
-    return LevelResult(level="point", code=None, lat=float(lat), lon=float(lon), record=None)
+def detect_point(df: pd.DataFrame, lat_col: str = "lat", lon_col: str = "lon") -> gpd.GeoDataFrame:
+    """Reverse-geocode each (lat, lon) row in `df` to its containing Thai admin units.
+
+    `df` can be a plain DataFrame with `lat_col`/`lon_col` columns, or an
+    already-built point GeoDataFrame. One spatial join against the
+    subdistrict boundary polygons (which already carry their parent
+    district/province P-codes as attributes) resolves all three levels at
+    once. Points outside every polygon (e.g. outside Thailand) get null
+    `*_code`/`*_en` columns.
+
+    Returns `df`'s rows as a GeoDataFrame with `province_code`,
+    `province_en`, `district_code`, `district_en`, `subdistrict_code`, and
+    `subdistrict_en` columns added.
+    """
+    points = _to_geodataframe(df, lon_col=lon_col, lat_col=lat_col)
+    joined = gpd.sjoin(points, _subdistrict_boundary(), how="left", predicate="within")
+    return joined.drop(columns="index_right")
 
 
 def detect_level(value: str | tuple[float, float] | list[float]) -> LevelResult:
     """Auto-detect whether `value` is a Thai P-code or a raw (lat, lon) point.
 
-    Dispatches to `detect_province`/`detect_district`/`detect_subdistrict` for
-    a P-code string (matched by length/format), or `detect_point` for a
-    `(lat, lon)` pair. Prefer the explicit `detect_*` functions when you
-    already know what kind of input you have.
+    Dispatches to `detect_province`/`detect_district`/`detect_subdistrict`
+    for a P-code string (matched by length/format); a `(lat, lon)` pair is
+    wrapped as a "point"-level result without reverse-geocoding (use
+    `detect_point` for that, on a DataFrame of points).
     """
     if isinstance(value, str):
         code = value.strip().upper()
@@ -102,4 +141,4 @@ def detect_level(value: str | tuple[float, float] | list[float]) -> LevelResult:
             f"detect_level expects a P-code string or a (lat, lon) pair of length 2, got {value!r}"
         )
     lat, lon = value
-    return detect_point(lat, lon)
+    return LevelResult(level="point", code=None, lat=float(lat), lon=float(lon), record=None)
