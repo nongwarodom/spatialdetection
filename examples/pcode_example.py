@@ -220,6 +220,20 @@ def main() -> None:
     print("province_hotspots(df, pcode_col='pcode') -- no lat/long column present at all:")
     print(prov_via_pcode.sort_values("count", ascending=False)[["province_en", "count"]].head(5).to_string(index=False), "\n")
 
+    # province_col/district_col/subdistrict_col are identical synonyms for
+    # pcode_col, just named for whichever level matches your column -- pick
+    # whichever reads clearest. subdistrict_col here needs no rollup at all
+    # (the pcode column is already subdistrict-grained); district_col rolls
+    # district_code up to subdistrict_hotspots's parent level, province.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        sub_via_subdistrict_col = subdistrict_hotspots(df[["pcode"]], subdistrict_col="pcode", k=5, permutations=49)
+        prov_via_district_col = province_hotspots(df[["district_code"]], district_col="district_code", k=5, permutations=49)
+    print("subdistrict_hotspots(df, subdistrict_col='pcode'):")
+    print(sub_via_subdistrict_col.sort_values("count", ascending=False)[["subdistrict_en", "count"]].head(3).to_string(index=False))
+    print("\nprovince_hotspots(df, district_col='district_code'):")
+    print(prov_via_district_col.sort_values("count", ascending=False)[["province_en", "count"]].head(3).to_string(index=False), "\n")
+
     # 4. Per disease: cross-check pcode_col against lat/long, then detect
     # anomalies at every level and auto-plot each result.
     for disease in DISEASE_OUTBREAK_PROVINCE_EN:
