@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from spatialdetection import district_hotspots, province_hotspots, subdistrict_hotspots
 
@@ -15,6 +16,11 @@ _CENTROIDS_PATH = Path(__file__).resolve().parent.parent / "data" / "thailand_ad
 def _provinces() -> pd.DataFrame:
     with _CENTROIDS_PATH.open(encoding="utf-8") as f:
         return pd.DataFrame(json.load(f)["provinces"])
+
+
+def _subdistricts() -> pd.DataFrame:
+    with _CENTROIDS_PATH.open(encoding="utf-8") as f:
+        return pd.DataFrame(json.load(f)["subdistricts"])
 
 
 def _case_points_with_outbreak(outbreak_province_en: str = "Chiang Mai") -> pd.DataFrame:
@@ -93,3 +99,63 @@ def test_province_hotspots_drops_points_outside_thailand():
     result = province_hotspots(df, k=5, permutations=49)
 
     assert result["count"].sum() == len(case_points)  # the unmatched point isn't silently counted somewhere
+
+
+def _case_pcodes_with_outbreak(outbreak_province_en: str = "Chiang Mai") -> pd.DataFrame:
+    """Same shape as _case_points_with_outbreak, but pcode-only -- no lat/lon."""
+    subdistricts = _subdistricts()
+    provinces = _provinces()
+    by_province_en = subdistricts.merge(provinces[["province_code", "province_en"]], on="province_code")
+
+    background_en = ["Bangkok", "Nonthaburi", "Pathum Thani", "Samut Prakan", "Nakhon Pathom"]
+    rows = []
+    for province_en in background_en:
+        code = by_province_en[by_province_en["province_en"] == province_en]["subdistrict_code"].iloc[0]
+        rows += [code] * int(rng.integers(2, 8))
+    outbreak_code = by_province_en[by_province_en["province_en"] == outbreak_province_en]["subdistrict_code"].iloc[0]
+    rows += [outbreak_code] * 60
+    return pd.DataFrame({"pcode": rows})
+
+
+def test_province_hotspots_accepts_pcode_col_no_lat_lon():
+    df = _case_pcodes_with_outbreak()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        result = province_hotspots(df, pcode_col="pcode", k=5, permutations=199)
+
+    assert len(result) == 77
+    chiang_mai = result[result["province_en"] == "Chiang Mai"].iloc[0]
+    assert chiang_mai["count"] == 60
+
+
+def test_pcode_col_rolls_up_finer_code_to_requested_level():
+    subdistricts = _subdistricts()
+    provinces = _provinces()
+    by_province_en = subdistricts.merge(provinces[["province_code", "province_en"]], on="province_code")
+    chiang_mai_subdistrict = by_province_en[by_province_en["province_en"] == "Chiang Mai"]["subdistrict_code"].iloc[0]
+    bangkok_subdistrict = by_province_en[by_province_en["province_en"] == "Bangkok"]["subdistrict_code"].iloc[0]
+    df = pd.DataFrame({"pcode": [chiang_mai_subdistrict] * 60 + [bangkok_subdistrict] * 5})
+
+    result = province_hotspots(df, pcode_col="pcode", k=5, permutations=49)
+
+    chiang_mai = result[result["province_en"] == "Chiang Mai"].iloc[0]
+    assert chiang_mai["count"] == 60
+
+
+def test_pcode_col_rejects_coarser_code_than_requested_level():
+    df = pd.DataFrame({"pcode": ["TH10", "TH50"]})  # province-grained, too coarse for subdistrict
+    with pytest.raises(ValueError, match="shorter than a subdistrict"):
+        subdistrict_hotspots(df, pcode_col="pcode")
+
+
+def test_pcode_col_sums_value_col_when_given():
+    df = _case_pcodes_with_outbreak()
+    df["severity"] = 2
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        result = province_hotspots(df, value_col="severity", pcode_col="pcode", k=5, permutations=49)
+
+    chiang_mai = result[result["province_en"] == "Chiang Mai"].iloc[0]
+    assert chiang_mai["severity"] == 120

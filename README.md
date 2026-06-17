@@ -110,6 +110,11 @@ hot_provinces = province_hotspots(df)
 hot_districts = district_hotspots(df)
 hot_subdistricts = subdistrict_hotspots(df)  # needs dense data -- see caveat below
 
+# No lat/lon? If your data already carries a P-code per row, pcode_col
+# skips the spatial join entirely -- a finer code rolls up to the level
+# you call automatically (subdistrict code -> province_hotspots works).
+hot_provinces = province_hotspots(df, pcode_col="subdistrict_code")
+
 # Auto-plot any of the above: a choropleth of the matching admin boundaries
 # (or a point scatter for raw getis_ord_hotspots/spatiotemporal_hotspots
 # output), colored by gi_zscore on a diverging scale centered at zero.
@@ -146,15 +151,18 @@ auto-plotted map, all from one plain DataFrame).
   bin labels for a timestamp column) and `spatiotemporal_hotspots`
   (Getis-Ord Gi* run independently per time bin).
 - `spatialdetection.level_hotspots` — `province_hotspots`/`district_hotspots`/
-  `subdistrict_hotspots` take point-level (lat, lon) data, reverse-geocode it
-  with `detect_point`, aggregate onto *every* unit at that level (so
+  `subdistrict_hotspots` aggregate onto *every* unit at that level (so
   zero-count units are included, not dropped — required for correct
-  Getis-Ord neighborhood z-scores), and run `getis_ord_hotspots` on the
-  result. Finer levels (district, especially subdistrict) need denser point
-  data: with mostly-zero counts spread across thousands of units, the
-  permutation test's reference distribution degenerates and p-values stop
-  being meaningful — prefer `province_hotspots`/`district_hotspots` unless
-  your data supports the finer grain.
+  Getis-Ord neighborhood z-scores), then run `getis_ord_hotspots` on the
+  result. Two input modes: point-level (lat, lon) data, reverse-geocoded
+  with `detect_point`; or `pcode_col`, if your data already carries a
+  P-code per row — skips the spatial join entirely, and a finer code (e.g.
+  subdistrict) rolls up to whatever level you call via string slicing, no
+  lat/lon needed at all. Finer levels (district, especially subdistrict)
+  need denser data: with mostly-zero counts spread across thousands of
+  units, the permutation test's reference distribution degenerates and
+  p-values stop being meaningful — prefer `province_hotspots`/
+  `district_hotspots` unless your data supports the finer grain.
 
 ## Development
 
