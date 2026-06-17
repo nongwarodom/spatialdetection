@@ -1,14 +1,18 @@
 """End-to-end tour of the spatialdetection API using a plain pandas DataFrame.
 
 No GeoDataFrame setup required: dbscan_clusters, cluster_summary, morans_i,
-getis_ord_hotspots, and spatiotemporal_hotspots all accept a plain DataFrame
-with lon/lat columns and build the geometry internally.
+getis_ord_hotspots, spatiotemporal_hotspots, and province_hotspots/
+district_hotspots/subdistrict_hotspots all accept a plain DataFrame with
+lon/lat columns and build the geometry internally.
 
 Run with:
     uv run python examples/quickstart.py
 """
 
 from __future__ import annotations
+
+import json
+import warnings
 
 import matplotlib
 
@@ -25,6 +29,7 @@ from spatialdetection import (
     getis_ord_hotspots,
     morans_i,
     plot_level_map,
+    province_hotspots,
     spatiotemporal_hotspots,
 )
 
@@ -51,6 +56,23 @@ def make_sample_cases() -> pd.DataFrame:
     days = pd.to_datetime("2024-06-01") + pd.to_timedelta(rng.integers(0, 5, size=len(df)), unit="D")
     df["reported_at"] = days
     return df
+
+
+def make_multi_province_outbreak() -> pd.DataFrame:
+    """Case points spread across several provinces, with one outbreak province."""
+    with open("data/thailand_admin_centroids.json") as f:
+        provinces = pd.DataFrame(json.load(f)["provinces"])
+    background_codes = ["TH11", "TH12", "TH13", "TH14", "TH15", "TH16", "TH17", "TH18", "TH19"]
+    outbreak_code = provinces.loc[provinces["province_en"] == "Chiang Mai", "province_code"].iloc[0]
+    chosen = provinces[provinces["province_code"].isin([*background_codes, outbreak_code])]
+
+    points = []
+    for _, p in chosen.iterrows():
+        n = 60 if p["province_code"] == outbreak_code else rng.integers(2, 8)
+        points.append(
+            pd.DataFrame({"lon": rng.normal(p["lon"], 0.05, size=n), "lat": rng.normal(p["lat"], 0.05, size=n)})
+        )
+    return pd.concat(points, ignore_index=True)
 
 
 def main() -> None:
@@ -88,7 +110,17 @@ def main() -> None:
     # 5. Reverse-geocode the case locations: which subdistrict is each one in?
     located = detect_point(df)
     print("Reverse-geocoded case counts by subdistrict:")
-    print(located.groupby("subdistrict_en")["cases"].sum().sort_values(ascending=False).to_string())
+    print(located.groupby("subdistrict_en")["cases"].sum().sort_values(ascending=False).to_string(), "\n")
+
+    # 6. Province-level hotspot detection: aggregate point data onto every
+    # province (zero-count provinces included) and run Getis-Ord Gi* there.
+    outbreak_df = make_multi_province_outbreak()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # libpysal disconnected-components notice
+        province_result = province_hotspots(outbreak_df, k=5, permutations=499)
+    hot = province_result[province_result["hotspot"] == 1]
+    print("Hotspot province(s):")
+    print(hot[["province_en", "count", "gi_zscore", "gi_pvalue"]].to_string(index=False))
 
 
 if __name__ == "__main__":

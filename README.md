@@ -19,6 +19,21 @@ Try the end-to-end example (no GeoDataFrame setup needed — see Usage below):
 uv run python examples/quickstart.py
 ```
 
+### Notebook / IDE
+
+`notebooks/quickstart.ipynb` is the same tour as `examples/quickstart.py`,
+cell-by-cell with inline plots. To run it:
+
+```bash
+uv run python -m ipykernel install --user --name spatialdetection --display-name "spatialdetection"
+uv run jupyter lab notebooks/quickstart.ipynb
+```
+
+Or open the project folder in VS Code with the Jupyter extension, open the
+notebook, and select the **spatialdetection** kernel (registered by the
+command above) before running cells. The same kernel also works for ad hoc
+`.py` files run via the Jupyter extension's "Run Cell"/interactive window.
+
 ## Usage
 
 Every clustering/autocorrelation function takes a plain `pandas.DataFrame`
@@ -41,6 +56,9 @@ from spatialdetection import (
     plot_level_map,
     time_bin_label,
     spatiotemporal_hotspots,
+    province_hotspots,
+    district_hotspots,
+    subdistrict_hotspots,
 )
 
 # df is a plain DataFrame with "lon"/"lat" columns (e.g. from pd.read_csv)
@@ -75,6 +93,13 @@ ax = plot_level_map((13.7563, 100.5018))
 hotspots_by_week = spatiotemporal_hotspots(
     df, time_col="observed_at", value_col="value", timeframe="week"
 )
+
+# Admin-level hotspot detection: reverse-geocode point data onto every
+# province/district/subdistrict (zero-count units included, not dropped),
+# then run Getis-Ord Gi* on the aggregated counts (or value_col sums).
+hot_provinces = province_hotspots(df)
+hot_districts = district_hotspots(df)
+hot_subdistricts = subdistrict_hotspots(df)  # needs dense data -- see caveat below
 ```
 
 See `examples/quickstart.py` for a runnable version of this with synthetic
@@ -97,6 +122,16 @@ auto-plotted map, all from one plain DataFrame).
 - `spatialdetection.spatiotemporal` — `time_bin_label` (day/week/month
   bin labels for a timestamp column) and `spatiotemporal_hotspots`
   (Getis-Ord Gi* run independently per time bin).
+- `spatialdetection.level_hotspots` — `province_hotspots`/`district_hotspots`/
+  `subdistrict_hotspots` take point-level (lat, lon) data, reverse-geocode it
+  with `detect_point`, aggregate onto *every* unit at that level (so
+  zero-count units are included, not dropped — required for correct
+  Getis-Ord neighborhood z-scores), and run `getis_ord_hotspots` on the
+  result. Finer levels (district, especially subdistrict) need denser point
+  data: with mostly-zero counts spread across thousands of units, the
+  permutation test's reference distribution degenerates and p-values stop
+  being meaningful — prefer `province_hotspots`/`district_hotspots` unless
+  your data supports the finer grain.
 
 ## Development
 

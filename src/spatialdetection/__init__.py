@@ -9,6 +9,7 @@ from spatialdetection.detect import (
     detect_subdistrict,
 )
 from spatialdetection.io import load_points, points_from_dataframe
+from spatialdetection.level_hotspots import district_hotspots, province_hotspots, subdistrict_hotspots
 from spatialdetection.plotting import plot_level_map
 from spatialdetection.spatiotemporal import spatiotemporal_hotspots, time_bin_label
 
@@ -21,12 +22,15 @@ __all__ = [
     "detect_point",
     "detect_province",
     "detect_subdistrict",
+    "district_hotspots",
     "getis_ord_hotspots",
     "knn_weights",
     "load_points",
     "morans_i",
     "plot_level_map",
     "points_from_dataframe",
+    "province_hotspots",
     "spatiotemporal_hotspots",
+    "subdistrict_hotspots",
     "time_bin_label",
 ]
