@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+import warnings
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -114,9 +115,21 @@ def detect_point(df: pd.DataFrame, lat_col: str = "lat", lon_col: str = "lon") -
 
     Returns `df`'s rows as a GeoDataFrame with `province_code`,
     `province_en`, `district_code`, `district_en`, `subdistrict_code`, and
-    `subdistrict_en` columns added.
+    `subdistrict_en` columns added. If `df` already has a column with one of
+    those names, it's dropped and overwritten with the freshly resolved
+    value (with a warning) -- otherwise `gpd.sjoin` would silently rename
+    both the old and new columns with `_left`/`_right` suffixes instead.
     """
     points = _to_geodataframe(df, lon_col=lon_col, lat_col=lat_col)
+    output_cols = set(_BOUNDARY_FIELD_RENAME.values())
+    colliding = [c for c in points.columns if c in output_cols]
+    if colliding:
+        warnings.warn(
+            f"detect_point overwrites existing column(s) {colliding} with freshly "
+            f"resolved values; rename them first if you want to keep the originals.",
+            stacklevel=2,
+        )
+        points = points.drop(columns=colliding)
     joined = gpd.sjoin(points, _subdistrict_boundary(), how="left", predicate="within")
     return joined.drop(columns="index_right")
 

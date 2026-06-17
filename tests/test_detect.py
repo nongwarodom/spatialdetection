@@ -71,6 +71,23 @@ def test_detect_point_accepts_custom_column_names():
     assert result.iloc[0]["subdistrict_code"] == "TH100101"
 
 
+def test_detect_point_overwrites_colliding_input_column_with_warning():
+    # gpd.sjoin would otherwise silently rename both copies to
+    # province_code_left/province_code_right instead of erroring.
+    df = pd.DataFrame(
+        {
+            "lat": [13.751466582507641],
+            "lon": [100.49223438698446],
+            "province_code": ["stale-value"],
+        }
+    )
+
+    with pytest.warns(UserWarning, match="province_code"):
+        result = detect_point(df)
+
+    assert result.iloc[0]["province_code"] == "TH10"
+
+
 def test_detect_province_rejects_wrong_format():
     with pytest.raises(ValueError):
         detect_province("TH1001")  # district-shaped code

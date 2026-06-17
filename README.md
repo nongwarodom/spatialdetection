@@ -19,6 +19,13 @@ Try the end-to-end example (no GeoDataFrame setup needed — see Usage below):
 uv run python examples/quickstart.py
 ```
 
+For a larger, P-code-centric example (40k+ synthetic person records across
+multiple provinces and 30 days, rolled up to subdistrict/district/province):
+
+```bash
+uv run python examples/pcode_example.py
+```
+
 ### Notebook / IDE
 
 `notebooks/quickstart.ipynb` is the same tour as `examples/quickstart.py`,
@@ -116,7 +123,11 @@ auto-plotted map, all from one plain DataFrame).
   location); `detect_point` is the inverse, reverse-geocoding a DataFrame of
   (lat, lon) rows to their containing province/district/subdistrict
   (location -> code) via a spatial join. `detect_level` auto-dispatches a
-  single P-code string or (lat, lon) pair.
+  single P-code string or (lat, lon) pair. P-codes are nested strings
+  (subdistrict `"TH100101"` = district `"TH1001"` + 2 digits = province
+  `"TH10"` + 2 more), so if you already have a subdistrict P-code per row,
+  `code[:6]`/`code[:4]` gets you the parent district/province code directly
+  — no lookup needed (see `examples/pcode_example.py`).
 - `spatialdetection.plotting` — `plot_level_map`, auto-zoomed/styled to
   whatever level `detect_level` finds for its input.
 - `spatialdetection.spatiotemporal` — `time_bin_label` (day/week/month
