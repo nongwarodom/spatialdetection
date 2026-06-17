@@ -14,7 +14,9 @@ line-list data often does), which demonstrates:
    admin levels.
 2. Aggregating that rolled-up pcode data directly with a groupby is the
    same work province_hotspots/district_hotspots/subdistrict_hotspots do
-   internally from lat/long via detect_point's spatial join.
+   internally from lat/long via detect_point's spatial join -- which is
+   exactly what pcode_col does for you: pass the column you already have
+   and skip the spatial join (and the lat/long columns) entirely.
 3. plot_hotspots auto-plots a choropleth straight from each hotspot
    function's output, per disease per level.
 
@@ -132,6 +134,23 @@ def make_all_disease_data() -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
+def compare_pcode_col_vs_latlon(disease_df: pd.DataFrame, disease: str) -> None:
+    """pcode_col skips detect_point's spatial join entirely -- confirm it agrees with the lat/long path."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # libpysal disconnected-components notice
+        via_pcode = province_hotspots(disease_df, pcode_col="pcode", k=5, permutations=49)
+        via_latlon = province_hotspots(disease_df, lon_col="long", lat_col="lat", k=5, permutations=49)
+
+    compare = via_pcode[["province_code", "count"]].merge(
+        via_latlon[["province_code", "count"]], on="province_code", suffixes=("_pcode_col", "_latlon")
+    )
+    matches = int((compare["count_pcode_col"] == compare["count_latlon"]).sum())
+    print(
+        f"  pcode_col vs lat/long aggregation for {disease}: {matches}/{len(compare)} provinces match exactly "
+        f"(any gap is expected: a jittered point can land just outside its source subdistrict's polygon)"
+    )
+
+
 def examine_and_detect_one_disease(disease_df: pd.DataFrame, disease: str) -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)  # libpysal disconnected-components notice
@@ -191,9 +210,21 @@ def main() -> None:
     print(f"Aggregated directly from pcode: {len(by_subdistrict)} subdistricts, "
           f"{len(by_district)} districts, {len(by_province)} provinces\n")
 
-    # 3. Per disease: detect anomalies at every level and auto-plot each result.
+    # 3. pcode_col does that same rollup-and-aggregate internally -- call
+    # province_hotspots/district_hotspots/subdistrict_hotspots directly on
+    # the pcode column. Drop lat/long here to prove they're not needed at all.
+    pcode_only = df[["pcode"]]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        prov_via_pcode = province_hotspots(pcode_only, pcode_col="pcode", k=5, permutations=99)
+    print("province_hotspots(df, pcode_col='pcode') -- no lat/long column present at all:")
+    print(prov_via_pcode.sort_values("count", ascending=False)[["province_en", "count"]].head(5).to_string(index=False), "\n")
+
+    # 4. Per disease: cross-check pcode_col against lat/long, then detect
+    # anomalies at every level and auto-plot each result.
     for disease in DISEASE_OUTBREAK_PROVINCE_EN:
         print(f"=== {disease} ===")
+        compare_pcode_col_vs_latlon(df[df["disease"] == disease], disease)
         examine_and_detect_one_disease(df[df["disease"] == disease], disease)
         print()
 
