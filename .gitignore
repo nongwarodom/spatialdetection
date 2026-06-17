@@ -19,6 +19,7 @@ wheels/
 
 # Example script output
 quickstart_map.png
+examples/output/
 
 # Vendored raw GIS source data (large, third-party, regenerable -- see data/raw/SOURCES.md)
 data/raw/*

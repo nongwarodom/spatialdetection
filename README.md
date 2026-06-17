@@ -19,8 +19,9 @@ Try the end-to-end example (no GeoDataFrame setup needed — see Usage below):
 uv run python examples/quickstart.py
 ```
 
-For a larger, P-code-centric example (40k+ synthetic person records across
-multiple provinces and 30 days, rolled up to subdistrict/district/province):
+For a larger, P-code-centric example (80k+ synthetic person records across
+two diseases, each with 30k+ cases, multiple provinces, and 30 days, rolled
+up to subdistrict/district/province and auto-plotted per disease per level):
 
 ```bash
 uv run python examples/pcode_example.py
@@ -61,6 +62,7 @@ from spatialdetection import (
     detect_point,
     detect_level,
     plot_level_map,
+    plot_hotspots,
     time_bin_label,
     spatiotemporal_hotspots,
     province_hotspots,
@@ -107,6 +109,11 @@ hotspots_by_week = spatiotemporal_hotspots(
 hot_provinces = province_hotspots(df)
 hot_districts = district_hotspots(df)
 hot_subdistricts = subdistrict_hotspots(df)  # needs dense data -- see caveat below
+
+# Auto-plot any of the above: a choropleth of the matching admin boundaries
+# (or a point scatter for raw getis_ord_hotspots/spatiotemporal_hotspots
+# output), colored by gi_zscore on a diverging scale centered at zero.
+ax = plot_hotspots(hot_provinces)
 ```
 
 See `examples/quickstart.py` for a runnable version of this with synthetic
@@ -129,7 +136,12 @@ auto-plotted map, all from one plain DataFrame).
   `code[:6]`/`code[:4]` gets you the parent district/province code directly
   — no lookup needed (see `examples/pcode_example.py`).
 - `spatialdetection.plotting` — `plot_level_map`, auto-zoomed/styled to
-  whatever level `detect_level` finds for its input.
+  whatever level `detect_level` finds for its input; `plot_hotspots`,
+  auto-plotted straight from a `getis_ord_hotspots`/`spatiotemporal_hotspots`/
+  `province_hotspots`/`district_hotspots`/`subdistrict_hotspots` result
+  (choropleth for admin-level results, point scatter otherwise), colored by
+  `gi_zscore` rather than the `hotspot` flag since that flag can be
+  unreliable under skewed counts (see below).
 - `spatialdetection.spatiotemporal` — `time_bin_label` (day/week/month
   bin labels for a timestamp column) and `spatiotemporal_hotspots`
   (Getis-Ord Gi* run independently per time bin).

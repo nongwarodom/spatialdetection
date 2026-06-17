@@ -1,21 +1,22 @@
-"""Using P-codes directly, and aggregating large person-level data by P-code.
+"""Using P-codes directly, aggregating multi-disease data, and auto-plotting anomalies.
 
-Builds a synthetic person-level dataset (pcode, lat, long, date) spread
-across multiple provinces over a 30-day window, with at least 30,000 rows.
-Each row already carries its subdistrict P-code (as real line-list data
-often does), which demonstrates two things:
+Builds a synthetic person-level dataset (pcode, lat, long, date, disease)
+spread across multiple provinces over a 30-day window, with at least 30,000
+cases per disease. Each row already carries its subdistrict P-code (as real
+line-list data often does), which demonstrates:
 
 1. Using P-codes directly: detect_subdistrict/detect_district/
    detect_province resolve a P-code to its name and centroid. Thailand's
    P-code scheme is nested (subdistrict "TH100101" = district "TH1001" +
    2 digits = province "TH10" + 2 more), so the parent district/province
-   codes can be derived from a subdistrict P-code by string slicing --
-   no lookup needed -- which is what lets one column roll up to all three
+   codes can be derived from a subdistrict P-code by string slicing -- no
+   lookup needed -- which is what lets one column roll up to all three
    admin levels.
 2. Aggregating that rolled-up pcode data directly with a groupby is the
    same work province_hotspots/district_hotspots/subdistrict_hotspots do
-   internally from lat/long via detect_point's spatial join. This script
-   cross-checks the two paths agree.
+   internally from lat/long via detect_point's spatial join.
+3. plot_hotspots auto-plots a choropleth straight from each hotspot
+   function's output, per disease per level.
 
 Run with:
     uv run python examples/pcode_example.py
@@ -25,6 +26,11 @@ from __future__ import annotations
 
 import json
 import warnings
+from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")  # headless: this script saves PNGs instead of opening windows
 
 import numpy as np
 import pandas as pd
@@ -34,15 +40,17 @@ from spatialdetection import (
     detect_province,
     detect_subdistrict,
     district_hotspots,
+    plot_hotspots,
     province_hotspots,
     subdistrict_hotspots,
 )
 
 rng = np.random.default_rng(0)
 
-MIN_PERSONS = 30_000
+MIN_PERSONS_PER_DISEASE = 30_000
 DAYS = 30
 START_DATE = "2024-05-01"
+OUTPUT_DIR = Path(__file__).resolve().parent / "output"
 
 # 7 background provinces spread across Thailand's regions, 2 subdistricts each
 BACKGROUND_PROVINCES_EN = [
@@ -55,7 +63,13 @@ BACKGROUND_PROVINCES_EN = [
     "Chon Buri",
 ]
 SUBDISTRICTS_PER_PROVINCE = 2
-OUTBREAK_PROVINCE_EN = "Chiang Rai"  # not in the background list -> isolated signal
+
+# Each disease gets its own outbreak province, not in the background list
+# above, so the resulting hotspot maps genuinely differ by disease.
+DISEASE_OUTBREAK_PROVINCE_EN = {
+    "Dengue": "Chiang Rai",
+    "Influenza": "Surat Thani",
+}
 OUTBREAK_PERSONS = 8_000
 
 
@@ -70,8 +84,8 @@ def _jittered_persons(subdistrict_row: pd.Series, n: int, start: pd.Timestamp) -
     )
 
 
-def make_person_data() -> pd.DataFrame:
-    """Person-level records: one row per person, tagged with subdistrict pcode.
+def make_disease_data(outbreak_province_en: str) -> pd.DataFrame:
+    """Person-level records for one disease: one row per case, tagged with subdistrict pcode.
 
     Every province gets a small baseline count, not just the ones below --
     Getis-Ord's permutation test handles "0 vs. 0" neighbor comparisons
@@ -100,18 +114,59 @@ def make_person_data() -> pd.DataFrame:
     for _, s in pd.concat(chosen, ignore_index=True).iterrows():
         rows.append(_jittered_persons(s, rng.integers(1500, 2500), start))
 
-    outbreak = by_province_en[by_province_en["province_en"] == OUTBREAK_PROVINCE_EN].sample(1, random_state=1)
+    outbreak = by_province_en[by_province_en["province_en"] == outbreak_province_en].sample(1, random_state=1)
     for _, s in outbreak.iterrows():
         rows.append(_jittered_persons(s, OUTBREAK_PERSONS, start))
 
     df = pd.concat(rows, ignore_index=True)
-    assert len(df) >= MIN_PERSONS, f"only {len(df)} rows, need >= {MIN_PERSONS}"
+    assert len(df) >= MIN_PERSONS_PER_DISEASE, f"only {len(df)} rows, need >= {MIN_PERSONS_PER_DISEASE}"
     return df
 
 
+def make_all_disease_data() -> pd.DataFrame:
+    frames = []
+    for disease, outbreak_province_en in DISEASE_OUTBREAK_PROVINCE_EN.items():
+        disease_df = make_disease_data(outbreak_province_en)
+        disease_df["disease"] = disease
+        frames.append(disease_df)
+    return pd.concat(frames, ignore_index=True)
+
+
+def examine_and_detect_one_disease(disease_df: pd.DataFrame, disease: str) -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # libpysal disconnected-components notice
+        results = {
+            "province": province_hotspots(disease_df, lon_col="long", lat_col="lat", k=5, permutations=499),
+            "district": district_hotspots(disease_df, lon_col="long", lat_col="lat", k=5, permutations=199),
+            "subdistrict": subdistrict_hotspots(disease_df, lon_col="long", lat_col="lat", k=5, permutations=99),
+        }
+
+    name_col = {"province": "province_en", "district": "district_en", "subdistrict": "subdistrict_en"}
+    for level, result in results.items():
+        # Ranked by count (not filtered to hotspot==1): at this skew -- one
+        # dominant outbreak unit among many small/baseline ones -- the
+        # gi_pvalue significance flag is unreliable (see level_hotspots.py),
+        # so filtering to "significant" can hide the actual outbreak.
+        top = result.sort_values("count", ascending=False).head(3)
+        print(f"  Top {level}(s) by case count:")
+        print(top[[name_col[level], "count", "gi_zscore", "gi_pvalue", "hotspot"]].to_string(index=False, header=False).replace("\n", "\n    "))
+
+        # Auto-plot straight from the hotspot result, colored by gi_zscore
+        # (continuous, not the unreliable hotspot flag -- see plot_hotspots).
+        ax = plot_hotspots(result)
+        ax.set_title(f"{disease}: {ax.get_title()}")
+        out_path = OUTPUT_DIR / f"{disease.lower()}_{level}_hotspots.png"
+        ax.figure.savefig(out_path, dpi=100)
+        print(f"    -> saved {out_path}")
+
+
 def main() -> None:
-    df = make_person_data()
-    print(f"{len(df)} person records across {df['date'].dt.date.nunique()} days, columns: {list(df.columns)}\n")
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    df = make_all_disease_data()
+
+    print(f"{len(df)} person records across {df['disease'].nunique()} diseases and {df['date'].dt.date.nunique()} days")
+    print("Examine data: cases per disease")
+    print(df.groupby("disease").size().rename("persons").to_string(), "\n")
 
     # 1. Using P-codes directly: look up a sample pcode's name/centroid
     sample_pcode = df["pcode"].iloc[0]
@@ -130,41 +185,17 @@ def main() -> None:
     # the subdistrict pcode is already known per row.
     df["district_code"] = df["pcode"].str[:6]
     df["province_code"] = df["pcode"].str[:4]
-
-    by_subdistrict = df.groupby("pcode").size().rename("persons")
-    by_district = df.groupby("district_code").size().rename("persons")
-    by_province = df.groupby("province_code").size().rename("persons")
+    by_subdistrict = df.groupby("pcode").size()
+    by_district = df.groupby("district_code").size()
+    by_province = df.groupby("province_code").size()
     print(f"Aggregated directly from pcode: {len(by_subdistrict)} subdistricts, "
-          f"{len(by_district)} districts, {len(by_province)} provinces")
-    print("Top provinces by person count:")
-    print(by_province.sort_values(ascending=False).head(8).to_string(), "\n")
+          f"{len(by_district)} districts, {len(by_province)} provinces\n")
 
-    # 3. Cross-check: the same point data run through province_hotspots
-    # (lat/long -> detect_point's spatial join -> groupby) should agree
-    # with the pcode-based tally above.
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)  # libpysal disconnected-components notice
-        prov_result = province_hotspots(df, lon_col="long", lat_col="lat", k=5, permutations=499)
-        dist_result = district_hotspots(df, lon_col="long", lat_col="lat", k=5, permutations=199)
-        sub_result = subdistrict_hotspots(df, lon_col="long", lat_col="lat", k=5, permutations=99)
-
-    reverse_geocoded_total = prov_result["count"].sum()
-    print(f"pcode-based total: {by_province.sum()}, reverse-geocoded total (province_hotspots): {reverse_geocoded_total}")
-    print("(small gap is expected: a few jittered points can land just outside their source subdistrict's polygon)\n")
-
-    # Ranked by count (not filtered to hotspot==1): at this skew -- one
-    # dominant outbreak unit among many small/baseline ones -- the gi_pvalue
-    # significance flag is unreliable (see level_hotspots.py's caveat on
-    # sparse/skewed counts), so filtering to "significant" can hide the
-    # actual outbreak. count + gi_zscore are the trustworthy signal here.
-    print("Top province(s) by person count:")
-    print(prov_result.sort_values("count", ascending=False)[["province_en", "count", "gi_zscore", "gi_pvalue", "hotspot"]].head(5).to_string(index=False))
-
-    print("\nTop district(s) by person count:")
-    print(dist_result.sort_values("count", ascending=False)[["district_en", "count", "gi_zscore", "gi_pvalue", "hotspot"]].head(5).to_string(index=False))
-
-    print("\nTop subdistrict(s) by person count:")
-    print(sub_result.sort_values("count", ascending=False)[["subdistrict_en", "count", "gi_zscore", "gi_pvalue", "hotspot"]].head(5).to_string(index=False))
+    # 3. Per disease: detect anomalies at every level and auto-plot each result.
+    for disease in DISEASE_OUTBREAK_PROVINCE_EN:
+        print(f"=== {disease} ===")
+        examine_and_detect_one_disease(df[df["disease"] == disease], disease)
+        print()
 
 
 if __name__ == "__main__":
