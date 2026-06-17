@@ -159,3 +159,42 @@ def test_pcode_col_sums_value_col_when_given():
 
     chiang_mai = result[result["province_en"] == "Chiang Mai"].iloc[0]
     assert chiang_mai["severity"] == 120
+
+
+def test_subdistrict_col_is_a_synonym_for_pcode_col():
+    df = _case_pcodes_with_outbreak().rename(columns={"pcode": "subdistrict_code"})
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        result = province_hotspots(df, subdistrict_col="subdistrict_code", k=5, permutations=49)
+
+    chiang_mai = result[result["province_en"] == "Chiang Mai"].iloc[0]
+    assert chiang_mai["count"] == 60
+
+
+def test_district_col_rolls_up_to_province():
+    df = pd.DataFrame({"district_code": ["TH1001"] * 5 + ["TH5705"] * 60})  # Bangkok, Chiang Rai districts
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        result = province_hotspots(df, district_col="district_code", k=5, permutations=49)
+
+    chiang_rai = result[result["province_en"] == "Chiang Rai"].iloc[0]
+    assert chiang_rai["count"] == 60
+
+
+def test_province_col_works_directly_at_province_level():
+    df = pd.DataFrame({"province_code": ["TH10"] * 5 + ["TH57"] * 60})
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        result = province_hotspots(df, province_col="province_code", k=5, permutations=49)
+
+    chiang_rai = result[result["province_en"] == "Chiang Rai"].iloc[0]
+    assert chiang_rai["count"] == 60
+
+
+def test_multiple_code_col_synonyms_at_once_raises():
+    df = pd.DataFrame({"pcode": ["TH10"]})
+    with pytest.raises(ValueError, match="only one of"):
+        province_hotspots(df, pcode_col="pcode", subdistrict_col="pcode")

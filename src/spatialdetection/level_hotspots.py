@@ -8,11 +8,13 @@ resulting per-unit centroids. Two input modes:
 
 - lat/lon point data (default): each row is reverse-geocoded to its admin
   unit with `detect_point`.
-- `pcode_col`: skips the spatial join entirely. If your data already
-  carries a P-code per row (subdistrict, district, or province -- as real
-  line-list data often does), the parent codes for a coarser level come
-  from string slicing (P-codes are nested), and aggregation is a plain
-  groupby. Faster, and works without any lat/lon at all.
+- `pcode_col` (or its level-named synonyms `province_col`/`district_col`/
+  `subdistrict_col` -- pass whichever reads best, they're identical):
+  skips the spatial join entirely. If your data already carries a P-code
+  per row (subdistrict, district, or province -- as real line-list data
+  often does), the parent codes for a coarser level come from string
+  slicing (P-codes are nested), and aggregation is a plain groupby.
+  Faster, and works without any lat/lon at all.
 
 Caveat: finer levels have far more units (77 provinces vs. 928 districts vs.
 7,425 subdistricts) competing for the same data. If most units end up with
@@ -32,6 +34,28 @@ from spatialdetection.detect import _COLLECTIONS, _LOOKUP_KEYS, _centroids, dete
 
 _CODE_LENGTH = {"province": 4, "district": 6, "subdistrict": 8}
 _EXAMPLE_CODE = {"province": "TH10", "district": "TH1001", "subdistrict": "TH100101"}
+
+
+def _resolve_code_col(
+    pcode_col: str | None, province_col: str | None, district_col: str | None, subdistrict_col: str | None
+) -> str | None:
+    given = [
+        (name, val)
+        for name, val in [
+            ("pcode_col", pcode_col),
+            ("province_col", province_col),
+            ("district_col", district_col),
+            ("subdistrict_col", subdistrict_col),
+        ]
+        if val is not None
+    ]
+    if len(given) > 1:
+        names = ", ".join(name for name, _ in given)
+        raise ValueError(
+            f"pass only one of pcode_col/province_col/district_col/subdistrict_col (they're "
+            f"synonyms), got {len(given)}: {names}"
+        )
+    return given[0][1] if given else None
 
 
 def _aggregate_by_code(codes: pd.Series, values: pd.Series | None, out_col: str, code_col: str) -> pd.Series:
@@ -91,19 +115,25 @@ def province_hotspots(
     permutations: int = 999,
     alpha: float = 0.05,
     pcode_col: str | None = None,
+    province_col: str | None = None,
+    district_col: str | None = None,
+    subdistrict_col: str | None = None,
 ) -> pd.DataFrame:
     """Province-level Getis-Ord Gi* hotspot detection.
 
     `df` is either point-level data with `lon_col`/`lat_col` columns (each
-    row reverse-geocoded to its province), or -- if `pcode_col` is given --
-    data that already carries a province/district/subdistrict P-code per
-    row (rolled up to province via string slicing, no lat/lon needed).
-    Rows are aggregated -- summed by `value_col` if given, else counted --
-    onto all 77 provinces. Returns one row per province with the aggregated
-    column, `gi_zscore`, `gi_pvalue`, and `hotspot` (1 = significant
-    hotspot, -1 = significant coldspot, 0 = not significant).
+    row reverse-geocoded to its province), or -- if one of `pcode_col`/
+    `province_col`/`district_col`/`subdistrict_col` is given (identical
+    synonyms; pass whichever name matches your column) -- data that
+    already carries a P-code per row (rolled up to province via string
+    slicing, no lat/lon needed). Rows are aggregated -- summed by
+    `value_col` if given, else counted -- onto all 77 provinces. Returns
+    one row per province with the aggregated column, `gi_zscore`,
+    `gi_pvalue`, and `hotspot` (1 = significant hotspot, -1 = significant
+    coldspot, 0 = not significant).
     """
-    return _level_hotspots(df, "province", value_col, lon_col, lat_col, pcode_col, k, permutations, alpha)
+    code_col = _resolve_code_col(pcode_col, province_col, district_col, subdistrict_col)
+    return _level_hotspots(df, "province", value_col, lon_col, lat_col, code_col, k, permutations, alpha)
 
 
 def district_hotspots(
@@ -115,14 +145,19 @@ def district_hotspots(
     permutations: int = 999,
     alpha: float = 0.05,
     pcode_col: str | None = None,
+    province_col: str | None = None,
+    district_col: str | None = None,
+    subdistrict_col: str | None = None,
 ) -> pd.DataFrame:
     """District-level Getis-Ord Gi* hotspot detection.
 
     Same as `province_hotspots`, aggregated onto all 928 districts instead.
-    `pcode_col` values must be at least district-grained (a province-only
+    A code passed via `pcode_col`/`province_col`/`district_col`/
+    `subdistrict_col` must be at least district-grained (a province-only
     code can't be rolled up to a finer level).
     """
-    return _level_hotspots(df, "district", value_col, lon_col, lat_col, pcode_col, k, permutations, alpha)
+    code_col = _resolve_code_col(pcode_col, province_col, district_col, subdistrict_col)
+    return _level_hotspots(df, "district", value_col, lon_col, lat_col, code_col, k, permutations, alpha)
 
 
 def subdistrict_hotspots(
@@ -134,10 +169,15 @@ def subdistrict_hotspots(
     permutations: int = 999,
     alpha: float = 0.05,
     pcode_col: str | None = None,
+    province_col: str | None = None,
+    district_col: str | None = None,
+    subdistrict_col: str | None = None,
 ) -> pd.DataFrame:
     """Subdistrict-level Getis-Ord Gi* hotspot detection.
 
     Same as `province_hotspots`, aggregated onto all 7,425 subdistricts
-    instead. `pcode_col` values must be subdistrict-grained.
+    instead. A code passed via `pcode_col`/`province_col`/`district_col`/
+    `subdistrict_col` must be subdistrict-grained.
     """
-    return _level_hotspots(df, "subdistrict", value_col, lon_col, lat_col, pcode_col, k, permutations, alpha)
+    code_col = _resolve_code_col(pcode_col, province_col, district_col, subdistrict_col)
+    return _level_hotspots(df, "subdistrict", value_col, lon_col, lat_col, code_col, k, permutations, alpha)
