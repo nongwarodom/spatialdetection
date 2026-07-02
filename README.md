@@ -170,12 +170,18 @@ alerts = weekly_province_ears[weekly_province_ears["c2_alert"]]  # C2 is EARS's 
 # subdistrict-level or early-outbreak province data) produces alert-flooded,
 # uninformative output, same caveat as the finer *_hotspots levels below.
 # Prefer coarser levels or a longer baseline_window for thin data.
-ax = plot_hotspots(weekly_province_ears, value_col="c2")
+
+# province_ears stacks every time bin's rows into one result, like
+# spatiotemporal_hotspots does -- filter to a single time_bin before
+# plotting a readable map.
+latest_bin = weekly_province_ears["time_bin"].max()
+ax = plot_hotspots(weekly_province_ears[weekly_province_ears["time_bin"] == latest_bin], value_col="c2")
 ```
 
 See `examples/quickstart.py` for a runnable version of this with synthetic
-data (DBSCAN, Moran's I, Getis-Ord Gi*, spatiotemporal hotspots, and an
-auto-plotted map, all from one plain DataFrame).
+data (DBSCAN, Moran's I, Getis-Ord Gi*, spatiotemporal hotspots, EARS
+temporal anomaly detection at day/week/month grain, and an auto-plotted
+map, all from one plain DataFrame).
 
 ## Modules
 
