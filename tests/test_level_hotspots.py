@@ -6,7 +6,17 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from spatialdetection import district_ears, district_hotspots, province_ears, province_hotspots, subdistrict_hotspots
+from spatialdetection import (
+    district_ears,
+    district_hotspots,
+    district_spatial_ears,
+    province_ears,
+    province_hotspots,
+    province_spatial_ears,
+    subdistrict_ears,
+    subdistrict_hotspots,
+    subdistrict_spatial_ears,
+)
 
 rng = np.random.default_rng(0)
 
@@ -263,3 +273,42 @@ def test_district_ears_returns_one_row_per_district_per_week():
     df = _weekly_baseline_with_late_spike(n_weeks=3)
     result = district_ears(df, time_col="reported_at", timeframe="week", baseline_window=7)
     assert len(result) == 928 * 3
+
+
+def test_province_spatial_ears_flags_a_late_spike_against_its_own_history():
+    # Same scenario as province_ears -- pooling in neighbors shouldn't stop
+    # the province with dense enough data of its own from still alerting.
+    df = _weekly_baseline_with_late_spike()
+    result = province_spatial_ears(df, time_col="reported_at", timeframe="week", baseline_window=7, k=5)
+
+    chiang_mai = result[result["province_en"] == "Chiang Mai"].sort_values("time_bin")
+    assert chiang_mai["c2_alert"].iloc[-1]
+    assert not chiang_mai["c2_alert"].iloc[:-1].any()
+
+
+def test_province_spatial_ears_zero_fills_every_province_in_every_week():
+    df = _weekly_baseline_with_late_spike(n_weeks=3)
+    result = province_spatial_ears(df, time_col="reported_at", timeframe="week", baseline_window=7, k=5)
+    assert len(result) == 77 * 3
+    assert {"c1", "c2", "c3", "c1_alert", "c2_alert", "c3_alert"} <= set(result.columns)
+
+
+def test_district_spatial_ears_returns_one_row_per_district_per_week():
+    df = _weekly_baseline_with_late_spike(n_weeks=3)
+    result = district_spatial_ears(df, time_col="reported_at", timeframe="week", baseline_window=7, k=5)
+    assert len(result) == 928 * 3
+
+
+def test_subdistrict_spatial_ears_produces_fewer_inf_c2_than_plain_subdistrict_ears():
+    # The whole point of pooling in neighbors: at subdistrict grain most
+    # units are near-zero-variance on their own (mostly 0 counts), so plain
+    # subdistrict_ears's c2 is heavily +-inf. Pooling in nearby subdistricts'
+    # history should give a workable, finite baseline far more often.
+    df = _weekly_baseline_with_late_spike(n_weeks=10)
+
+    plain = subdistrict_ears(df, time_col="reported_at", timeframe="week", baseline_window=7)
+    pooled = subdistrict_spatial_ears(df, time_col="reported_at", timeframe="week", baseline_window=7, k=5)
+
+    plain_inf = np.isinf(plain["c2"]).sum()
+    pooled_inf = np.isinf(pooled["c2"]).sum()
+    assert pooled_inf < plain_inf

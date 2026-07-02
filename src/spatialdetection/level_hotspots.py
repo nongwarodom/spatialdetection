@@ -27,7 +27,11 @@ that most subdistricts have a nonzero count.
 `province_ears`/`district_ears`/`subdistrict_ears` are the temporal
 counterpart: same aggregation, but compared against each unit's own history
 in prior time bins (EARS C1/C2/C3, see `temporal.py`) rather than its
-spatial neighbors within one bin.
+spatial neighbors within one bin. `province_spatial_ears`/
+`district_spatial_ears`/`subdistrict_spatial_ears` combine both: still a
+temporal (own-history) comparison, but the baseline itself pools in each
+unit's k nearest neighbors' history to stay stable when a single unit's own
+history is too thin (see `spatial_ears_scores` in `temporal.py`).
 """
 
 from __future__ import annotations
@@ -38,7 +42,7 @@ from spatialdetection.autocorrelation import getis_ord_hotspots
 from spatialdetection.detect import _COLLECTIONS, _LOOKUP_KEYS, _centroids, detect_point
 from spatialdetection.io import points_from_dataframe
 from spatialdetection.spatiotemporal import time_bin_label
-from spatialdetection.temporal import ears_scores
+from spatialdetection.temporal import ears_scores, spatial_ears_scores
 
 _CODE_LENGTH = {"province": 4, "district": 6, "subdistrict": 8}
 _EXAMPLE_CODE = {"province": "TH10", "district": "TH1001", "subdistrict": "TH100101"}
@@ -307,8 +311,122 @@ def subdistrict_ears(
     `province_ears`, aggregated onto all 7,425 subdistricts instead -- see
     that docstring, and `level_hotspots.py`'s module docstring caveat about
     sparse data at this grain (applies here too: a subdistrict with mostly
-    zero periods gives EARS a degenerate, near-zero-variance baseline)."""
+    zero periods gives EARS a degenerate, near-zero-variance baseline).
+    Consider `subdistrict_spatial_ears` instead, which pools in neighboring
+    subdistricts' history to work around exactly that."""
     code_col = _resolve_code_col(pcode_col, province_col, district_col, subdistrict_col)
     return _level_ears(
         df, "subdistrict", time_col, value_col, timeframe, lon_col, lat_col, code_col, baseline_window
+    )
+
+
+def _level_spatial_ears(
+    df: pd.DataFrame,
+    level: str,
+    time_col: str,
+    value_col: str | None,
+    timeframe: str,
+    lon_col: str,
+    lat_col: str,
+    pcode_col: str | None,
+    baseline_window: int,
+    k: int,
+) -> pd.DataFrame:
+    code_col = _LOOKUP_KEYS[level]
+    bins = time_bin_label(df[time_col], timeframe=timeframe)
+
+    panels = []
+    for bin_label in sorted(bins.unique()):
+        merged, out_col = _aggregate_to_level(df[bins == bin_label], level, value_col, lon_col, lat_col, pcode_col)
+        merged["time_bin"] = bin_label
+        panels.append(merged)
+    panel = pd.concat(panels, ignore_index=True)
+
+    return spatial_ears_scores(
+        panel, time_col="time_bin", group_col=code_col, value_col=out_col, lon_col="lon", lat_col="lat",
+        baseline_window=baseline_window, k=k,
+    )
+
+
+def province_spatial_ears(
+    df: pd.DataFrame,
+    time_col: str,
+    value_col: str | None = None,
+    timeframe: str = "week",
+    lon_col: str = "lon",
+    lat_col: str = "lat",
+    pcode_col: str | None = None,
+    province_col: str | None = None,
+    district_col: str | None = None,
+    subdistrict_col: str | None = None,
+    baseline_window: int = 7,
+    k: int = 5,
+) -> pd.DataFrame:
+    """Province-level EARS with a spatially-smoothed baseline (see
+    `spatial_ears_scores` in `temporal.py`).
+
+    Same aggregation, zero-filling, and C1/C2/C3 computation as
+    `province_ears`, except each province's baseline mean/std pools in its
+    `k` nearest neighboring provinces' history alongside its own, instead of
+    relying on that one province's history alone. The value being tested is
+    still purely that province's own current count -- only the baseline is
+    widened. Most useful at `district`/`subdistrict` grain, where a single
+    unit's own counts are often too sparse for `*_ears` alone (province-level
+    counts are usually already dense enough for `province_ears` on its own).
+
+    Only pool in neighbors that sit at a comparable rate to the unit itself
+    -- see `spatial_ears_scores`'s docstring: pooling in neighbors at a
+    genuinely different level doesn't just cost specificity, it can mask a
+    real spike (if it merely reaches the neighbors' everyday level) or
+    manufacture a false low-side signal (if the unit's own normal periods
+    look low against an inflated neighbor-driven baseline).
+    """
+    code_col = _resolve_code_col(pcode_col, province_col, district_col, subdistrict_col)
+    return _level_spatial_ears(df, "province", time_col, value_col, timeframe, lon_col, lat_col, code_col, baseline_window, k)
+
+
+def district_spatial_ears(
+    df: pd.DataFrame,
+    time_col: str,
+    value_col: str | None = None,
+    timeframe: str = "week",
+    lon_col: str = "lon",
+    lat_col: str = "lat",
+    pcode_col: str | None = None,
+    province_col: str | None = None,
+    district_col: str | None = None,
+    subdistrict_col: str | None = None,
+    baseline_window: int = 7,
+    k: int = 5,
+) -> pd.DataFrame:
+    """District-level EARS with a spatially-smoothed baseline. Same as
+    `province_spatial_ears`, aggregated onto all 928 districts instead --
+    see that docstring."""
+    code_col = _resolve_code_col(pcode_col, province_col, district_col, subdistrict_col)
+    return _level_spatial_ears(df, "district", time_col, value_col, timeframe, lon_col, lat_col, code_col, baseline_window, k)
+
+
+def subdistrict_spatial_ears(
+    df: pd.DataFrame,
+    time_col: str,
+    value_col: str | None = None,
+    timeframe: str = "week",
+    lon_col: str = "lon",
+    lat_col: str = "lat",
+    pcode_col: str | None = None,
+    province_col: str | None = None,
+    district_col: str | None = None,
+    subdistrict_col: str | None = None,
+    baseline_window: int = 7,
+    k: int = 5,
+) -> pd.DataFrame:
+    """Subdistrict-level EARS with a spatially-smoothed baseline. Same as
+    `province_spatial_ears`, aggregated onto all 7,425 subdistricts instead
+    -- see that docstring. This is where pooling matters most: a single
+    subdistrict's own counts are often mostly zero (see `subdistrict_ears`'s
+    caveat), but its k nearest subdistricts' combined history usually still
+    gives a workable, non-degenerate baseline."""
+    code_col = _resolve_code_col(pcode_col, province_col, district_col, subdistrict_col)
+    return _level_spatial_ears(
+        df, "subdistrict", time_col, value_col, timeframe, lon_col, lat_col, code_col, baseline_window, k
     )

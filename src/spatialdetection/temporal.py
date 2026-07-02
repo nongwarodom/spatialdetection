@@ -27,11 +27,24 @@ All three are z-score-like: `(value - baseline_mean) / baseline_std`. A
 zero-variance baseline (every prior value identical) makes this ±inf if the
 current value differs, or NaN if it doesn't -- both propagate naturally
 through the `> threshold` alert comparison.
+
+`spatial_ears_scores` is a variant for when a unit's own history is too thin
+to give C1/C2/C3 a meaningful baseline (the ±inf case above, common at finer
+admin grains): it pools a unit's `k` nearest spatial neighbors' historical
+values into that unit's baseline, alongside its own. The current value being
+tested is still purely the unit's own -- this widens the *baseline*, not the
+comparison -- so it's a different kind of "spatial" than `getis_ord_hotspots`
+(which compares current values across neighbors within one period). It only
+helps when the unit's neighbors sit at a comparable rate to its own; see the
+exchangeability caveat in `spatial_ears_scores`'s docstring before using it
+on units whose neighbors are at a different scale.
 """
 
 from __future__ import annotations
 
 import pandas as pd
+
+from spatialdetection.autocorrelation import knn_weights
 
 C1_ALERT_THRESHOLD = 3.0
 C2_ALERT_THRESHOLD = 3.0
@@ -88,6 +101,111 @@ def ears_scores(
         for _, group_df in out.groupby(group_col, sort=False)
     ]
     out = out.join(pd.concat(stat_frames))
+    out["c1_alert"] = out["c1"] > C1_ALERT_THRESHOLD
+    out["c2_alert"] = out["c2"] > C2_ALERT_THRESHOLD
+    out["c3_alert"] = out["c3"] > C3_ALERT_THRESHOLD
+    return out
+
+
+def _pooled_rolling_c_stat(wide: pd.DataFrame, target: str, neighbor_cols: list, window: int, gap: int) -> pd.Series:
+    """Same z-score-like statistic as `_rolling_c_stat`, but the baseline mean/std
+    is pooled across `target`'s own `window` lagged values AND its k nearest
+    neighbors' values over that same lagged window -- `window * (1 + len(neighbor_cols))`
+    data points feeding the baseline instead of just `window`. The numerator
+    (current value) is still target's own -- only the baseline is spatially widened."""
+    cols = [target, *neighbor_cols]
+    shifted = wide[cols].shift(gap + 1)
+    n = window * len(cols)
+    # skipna=False: a row with even one column still short of a full window
+    # must propagate NaN, not silently treat that column's contribution as 0.
+    pooled_sum = shifted.rolling(window).sum().sum(axis=1, skipna=False)
+    pooled_sumsq = (shifted**2).rolling(window).sum().sum(axis=1, skipna=False)
+    mean = pooled_sum / n
+    variance = (pooled_sumsq - n * mean**2) / (n - 1)
+    std = variance.clip(lower=0) ** 0.5
+    return (wide[target] - mean) / std
+
+
+def _spatial_ears_for_one_unit(wide: pd.DataFrame, target: str, neighbor_cols: list, baseline_window: int) -> pd.DataFrame:
+    c1 = _pooled_rolling_c_stat(wide, target, neighbor_cols, baseline_window, gap=0)
+    c2 = _pooled_rolling_c_stat(wide, target, neighbor_cols, baseline_window, gap=2)
+    c2_excess = (c2 - 1).clip(lower=0)
+    c3 = c2_excess + c2_excess.shift(1) + c2_excess.shift(2)
+    return pd.DataFrame({"c1": c1, "c2": c2, "c3": c3})
+
+
+def spatial_ears_scores(
+    panel: pd.DataFrame,
+    time_col: str,
+    group_col: str,
+    value_col: str,
+    lon_col: str = "lon",
+    lat_col: str = "lat",
+    baseline_window: int = 7,
+    k: int = 5,
+) -> pd.DataFrame:
+    """Spatially-smoothed variant of `ears_scores`: each unit's C1/C2/C3 baseline
+    (mean/std) pools its own `baseline_window` lagged values together with its
+    `k` nearest spatial neighbors' values over that same lagged window, instead
+    of relying on the unit alone. The current value being tested is still the
+    unit's own -- only the *baseline* is widened spatially.
+
+    This is a different kind of "spatial" than `getis_ord_hotspots`/
+    `province_hotspots`: those compare a unit's *current* value to its
+    neighbors' *current* values (spatial standout, one time period). This
+    compares a unit's current value to a *history* built from itself and its
+    neighbors (a more stable temporal baseline). It directly targets
+    `ears_scores`'s sparse-data weak spot: a unit whose own history is too
+    thin for a meaningful variance (std=0 -> c1/c2 = +-inf) usually still gets
+    a workable baseline once neighbors' history is pooled in -- useful at
+    finer grains (district, subdistrict) where a single unit's own counts are
+    often mostly zero.
+
+    IMPORTANT assumption: pooling treats the unit and its k neighbors as
+    exchangeable -- drawn from the same underlying rate. That's often true
+    for adjacent same-grain units (neighboring subdistricts tend to share a
+    background rate), but if a unit's own history sits at a genuinely
+    different *level* than its neighbors (e.g. a small, quiet subdistrict
+    next to a large, busy one), pooling doesn't just lose specificity, it can
+    invert the result: a real spike that merely reaches the neighbors'
+    everyday level gets averaged away (masked, no alert), while the unit's
+    own ordinary periods can look artificially low against the inflated
+    pooled mean (spurious low-side signal). It only helps when the unit is
+    sparse (own history alone is unusable) *and* its neighbors sit at a
+    comparable rate -- it does not fix a sparse unit surrounded by
+    differently-scaled neighbors. When in doubt, cross-check against plain
+    `ears_scores`/`province_ears` rather than trusting the pooled result alone.
+
+    `panel` has the same requirement as `ears_scores`: a complete (time x
+    group) panel, zero-filled for every unit in every period. Every unit must
+    also carry a static `lon_col`/`lat_col` (its centroid) for the k-NN
+    lookup -- `province_spatial_ears`/`district_spatial_ears`/
+    `subdistrict_spatial_ears` in `level_hotspots.py` build this
+    automatically and are the intended entry point. `k` must be smaller than
+    the number of distinct units in `panel`. Neighbors are unweighted
+    (equal contribution regardless of distance within the k-NN set), not
+    distance-decayed.
+    """
+    units = panel.drop_duplicates(subset=[group_col])[[group_col, lon_col, lat_col]].reset_index(drop=True)
+    if k >= len(units):
+        raise ValueError(f"k={k} neighbors requested but panel only has {len(units)} distinct {group_col!r} units")
+
+    w = knn_weights(units, k=k, lon_col=lon_col, lat_col=lat_col)
+    codes = units[group_col].to_numpy()
+    neighbor_codes = {codes[i]: [codes[j] for j in w.neighbors[i]] for i in range(len(codes))}
+
+    wide = panel.pivot(index=time_col, columns=group_col, values=value_col).sort_index()
+
+    frames = []
+    for code in codes:
+        stats = _spatial_ears_for_one_unit(wide, code, neighbor_codes[code], baseline_window)
+        stats[group_col] = code
+        stats[time_col] = wide.index.to_numpy()
+        frames.append(stats)
+    stats_long = pd.concat(frames, ignore_index=True)
+
+    out = panel.merge(stats_long, on=[group_col, time_col], how="left")
+    out = out.sort_values([group_col, time_col]).reset_index(drop=True)
     out["c1_alert"] = out["c1"] > C1_ALERT_THRESHOLD
     out["c2_alert"] = out["c2"] > C2_ALERT_THRESHOLD
     out["c3_alert"] = out["c3"] > C3_ALERT_THRESHOLD
