@@ -112,7 +112,9 @@ def main() -> None:
     # subdistrict selectors instead of a raw P-code -- health_zone is the
     # odd one out, since a MoPH health zone is a group of provinces (not a
     # single admin unit), so it plots and zooms to all of them together.
-    ax = plot_level_map(health_zone=1)  # zone 1: 8 northern provinces
+    # color sets the highlighted unit's (or units', for health_zone) fill
+    # color; show_labels/label_fontsize annotate each with its name.
+    ax = plot_level_map(health_zone=1, color="seagreen", show_labels=True, label_fontsize=7)
     ax.figure.savefig("quickstart_health_zone.png", dpi=100)
     print("Saved quickstart_health_zone.png\n")
 
@@ -134,8 +136,10 @@ def main() -> None:
     # 6b. plot_hotspots takes the same health_zone/province/district
     # selectors to restrict the choropleth to one region and zoom to it --
     # here, zooming into health zone 1 (the outbreak province, Chiang Mai,
-    # is in it) instead of showing the whole country.
-    ax = plot_hotspots(province_result, health_zone=1)
+    # is in it) instead of showing the whole country. cmap picks the
+    # colormap; show_labels/label_fontsize annotate each province with its
+    # name.
+    ax = plot_hotspots(province_result, health_zone=1, cmap="viridis", show_labels=True, label_fontsize=7)
     ax.figure.savefig("quickstart_hotspots_zone1.png", dpi=100)
     print("\nSaved quickstart_hotspots_zone1.png")
 
