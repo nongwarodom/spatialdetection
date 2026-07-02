@@ -23,6 +23,11 @@ degenerate (many identical all-zero neighborhoods), which can yield
 artificially extreme p-values rather than a meaningful signal. Prefer
 `province_hotspots` or `district_hotspots` unless your data is dense enough
 that most subdistricts have a nonzero count.
+
+`province_ears`/`district_ears`/`subdistrict_ears` are the temporal
+counterpart: same aggregation, but compared against each unit's own history
+in prior time bins (EARS C1/C2/C3, see `temporal.py`) rather than its
+spatial neighbors within one bin.
 """
 
 from __future__ import annotations
@@ -31,6 +36,9 @@ import pandas as pd
 
 from spatialdetection.autocorrelation import getis_ord_hotspots
 from spatialdetection.detect import _COLLECTIONS, _LOOKUP_KEYS, _centroids, detect_point
+from spatialdetection.io import points_from_dataframe
+from spatialdetection.spatiotemporal import time_bin_label
+from spatialdetection.temporal import ears_scores
 
 _CODE_LENGTH = {"province": 4, "district": 6, "subdistrict": 8}
 _EXAMPLE_CODE = {"province": "TH10", "district": "TH1001", "subdistrict": "TH100101"}
@@ -78,17 +86,23 @@ def _codes_from_pcode_col(df: pd.DataFrame, pcode_col: str, level: str) -> pd.Se
     return codes.str[:min_len]
 
 
-def _level_hotspots(
+def _aggregate_to_level(
     df: pd.DataFrame,
     level: str,
     value_col: str | None,
     lon_col: str,
     lat_col: str,
     pcode_col: str | None,
-    k: int,
-    permutations: int,
-    alpha: float,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, str]:
+    """Aggregate `df`'s rows onto *every* unit at `level` (zero-filled for units
+    with no rows -- required for correct Getis-Ord neighborhood z-scores, and
+    for an unbroken per-unit time series when building an EARS panel).
+
+    Returns `(merged, out_col)`: `merged` is a point GeoDataFrame with one
+    row per unit at `level` (centroid geometry, so it's plot_hotspots-ready
+    without going through getis_ord_hotspots's own lat/lon-to-geometry step)
+    and the aggregated `out_col` column ("count", or `value_col` if given).
+    """
     code_col = _LOOKUP_KEYS[level]
     out_col = value_col if value_col is not None else "count"
 
@@ -102,7 +116,21 @@ def _level_hotspots(
 
     units = pd.DataFrame(_centroids()[_COLLECTIONS[level]])
     merged = units.merge(agg, on=code_col, how="left").fillna({out_col: 0})
+    return points_from_dataframe(merged, lon_col="lon", lat_col="lat"), out_col
 
+
+def _level_hotspots(
+    df: pd.DataFrame,
+    level: str,
+    value_col: str | None,
+    lon_col: str,
+    lat_col: str,
+    pcode_col: str | None,
+    k: int,
+    permutations: int,
+    alpha: float,
+) -> pd.DataFrame:
+    merged, out_col = _aggregate_to_level(df, level, value_col, lon_col, lat_col, pcode_col)
     return getis_ord_hotspots(merged, value_col=out_col, k=k, permutations=permutations, alpha=alpha)
 
 
@@ -181,3 +209,106 @@ def subdistrict_hotspots(
     """
     code_col = _resolve_code_col(pcode_col, province_col, district_col, subdistrict_col)
     return _level_hotspots(df, "subdistrict", value_col, lon_col, lat_col, code_col, k, permutations, alpha)
+
+
+def _level_ears(
+    df: pd.DataFrame,
+    level: str,
+    time_col: str,
+    value_col: str | None,
+    timeframe: str,
+    lon_col: str,
+    lat_col: str,
+    pcode_col: str | None,
+    baseline_window: int,
+) -> pd.DataFrame:
+    code_col = _LOOKUP_KEYS[level]
+    bins = time_bin_label(df[time_col], timeframe=timeframe)
+
+    panels = []
+    for bin_label in sorted(bins.unique()):
+        merged, out_col = _aggregate_to_level(df[bins == bin_label], level, value_col, lon_col, lat_col, pcode_col)
+        merged["time_bin"] = bin_label
+        panels.append(merged)
+    panel = pd.concat(panels, ignore_index=True)
+
+    return ears_scores(panel, time_col="time_bin", group_col=code_col, value_col=out_col, baseline_window=baseline_window)
+
+
+def province_ears(
+    df: pd.DataFrame,
+    time_col: str,
+    value_col: str | None = None,
+    timeframe: str = "week",
+    lon_col: str = "lon",
+    lat_col: str = "lat",
+    pcode_col: str | None = None,
+    province_col: str | None = None,
+    district_col: str | None = None,
+    subdistrict_col: str | None = None,
+    baseline_window: int = 7,
+) -> pd.DataFrame:
+    """Province-level EARS temporal-anomaly detection (see `temporal.py`).
+
+    Unlike `province_hotspots` (which flags a province as anomalous relative
+    to its *spatial* neighbors within one time period), this flags a
+    province as anomalous relative to *its own* history in prior periods --
+    a persistent nationwide rise wouldn't stand out spatially (every
+    province looks similar to its neighbors) but would stand out here.
+
+    `df`/`value_col`/`pcode_col` etc. work exactly like `province_hotspots`.
+    `time_col` names the timestamp column; `timeframe` ("day"/"week"/"month",
+    same as `spatiotemporal_hotspots`) bins it, and every province is
+    zero-filled in every bin (same reasoning as `province_hotspots`'s
+    zero-fill, extended across time so each province's series has no gaps).
+    `baseline_window` is how many prior bins each period is compared against
+    (EARS's C1/C2 default is 7). Returns one row per (province, time_bin)
+    with the aggregated column, `c1`/`c2`/`c3` (z-score-like statistics) and
+    `c1_alert`/`c2_alert`/`c3_alert` (booleans) -- see `ears_scores` for what
+    each means.
+    """
+    code_col = _resolve_code_col(pcode_col, province_col, district_col, subdistrict_col)
+    return _level_ears(df, "province", time_col, value_col, timeframe, lon_col, lat_col, code_col, baseline_window)
+
+
+def district_ears(
+    df: pd.DataFrame,
+    time_col: str,
+    value_col: str | None = None,
+    timeframe: str = "week",
+    lon_col: str = "lon",
+    lat_col: str = "lat",
+    pcode_col: str | None = None,
+    province_col: str | None = None,
+    district_col: str | None = None,
+    subdistrict_col: str | None = None,
+    baseline_window: int = 7,
+) -> pd.DataFrame:
+    """District-level EARS temporal-anomaly detection. Same as `province_ears`,
+    aggregated onto all 928 districts instead -- see that docstring."""
+    code_col = _resolve_code_col(pcode_col, province_col, district_col, subdistrict_col)
+    return _level_ears(df, "district", time_col, value_col, timeframe, lon_col, lat_col, code_col, baseline_window)
+
+
+def subdistrict_ears(
+    df: pd.DataFrame,
+    time_col: str,
+    value_col: str | None = None,
+    timeframe: str = "week",
+    lon_col: str = "lon",
+    lat_col: str = "lat",
+    pcode_col: str | None = None,
+    province_col: str | None = None,
+    district_col: str | None = None,
+    subdistrict_col: str | None = None,
+    baseline_window: int = 7,
+) -> pd.DataFrame:
+    """Subdistrict-level EARS temporal-anomaly detection. Same as
+    `province_ears`, aggregated onto all 7,425 subdistricts instead -- see
+    that docstring, and `level_hotspots.py`'s module docstring caveat about
+    sparse data at this grain (applies here too: a subdistrict with mostly
+    zero periods gives EARS a degenerate, near-zero-variance baseline)."""
+    code_col = _resolve_code_col(pcode_col, province_col, district_col, subdistrict_col)
+    return _level_ears(
+        df, "subdistrict", time_col, value_col, timeframe, lon_col, lat_col, code_col, baseline_window
+    )

@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from spatialdetection import district_hotspots, province_hotspots, subdistrict_hotspots
+from spatialdetection import district_ears, district_hotspots, province_ears, province_hotspots, subdistrict_hotspots
 
 rng = np.random.default_rng(0)
 
@@ -198,3 +198,68 @@ def test_multiple_code_col_synonyms_at_once_raises():
     df = pd.DataFrame({"pcode": ["TH10"]})
     with pytest.raises(ValueError, match="only one of"):
         province_hotspots(df, pcode_col="pcode", subdistrict_col="pcode")
+
+
+def _weekly_baseline_with_late_spike(spike_province_en: str = "Chiang Mai", n_weeks: int = 10) -> pd.DataFrame:
+    """Steady per-province background case volume across every week, then an
+    extra burst in `spike_province_en` only in the final week -- for EARS
+    tests, where the signal to detect is a rise vs. a province's OWN history,
+    not (necessarily) a spatial standout against its neighbors."""
+    provinces = _provinces()
+    background_codes = ["TH11", "TH12", "TH13", "TH14", "TH15", "TH16", "TH17", "TH18", "TH19"]
+    spike_code = provinces.loc[provinces["province_en"] == spike_province_en, "province_code"].iloc[0]
+    chosen = provinces[provinces["province_code"].isin([*background_codes, spike_code])]
+
+    weeks = pd.to_datetime("2024-01-01") + pd.to_timedelta(np.arange(n_weeks) * 7, unit="D")
+    frames = []
+    for week in weeks:
+        for _, p in chosen.iterrows():
+            n = int(rng.integers(3, 6))
+            frames.append(
+                pd.DataFrame(
+                    {
+                        "lon": rng.normal(p["lon"], 0.02, size=n),
+                        "lat": rng.normal(p["lat"], 0.02, size=n),
+                        "reported_at": week,
+                    }
+                )
+            )
+    spike_row = provinces.loc[provinces["province_code"] == spike_code].iloc[0]
+    frames.append(
+        pd.DataFrame(
+            {
+                "lon": rng.normal(spike_row["lon"], 0.02, size=60),
+                "lat": rng.normal(spike_row["lat"], 0.02, size=60),
+                "reported_at": weeks[-1],
+            }
+        )
+    )
+    return pd.concat(frames, ignore_index=True)
+
+
+def test_province_ears_flags_a_late_spike_against_its_own_history():
+    df = _weekly_baseline_with_late_spike()
+    result = province_ears(df, time_col="reported_at", timeframe="week", baseline_window=7)
+
+    chiang_mai = result[result["province_en"] == "Chiang Mai"].sort_values("time_bin")
+    assert chiang_mai["c2_alert"].iloc[-1]  # only the final (spike) week alerts
+    assert not chiang_mai["c2_alert"].iloc[:-1].any()
+
+
+def test_province_ears_does_not_require_k_or_permutations():
+    # Purely temporal -- no spatial weights matrix, unlike province_hotspots.
+    df = _weekly_baseline_with_late_spike(n_weeks=3)
+    result = province_ears(df, time_col="reported_at", timeframe="week", baseline_window=7)
+    assert {"c1", "c2", "c3", "c1_alert", "c2_alert", "c3_alert"} <= set(result.columns)
+
+
+def test_province_ears_zero_fills_every_province_in_every_week():
+    df = _weekly_baseline_with_late_spike(n_weeks=3)
+    result = province_ears(df, time_col="reported_at", timeframe="week", baseline_window=7)
+    assert len(result) == 77 * 3  # every province, every week -- no gaps in any unit's series
+
+
+def test_district_ears_returns_one_row_per_district_per_week():
+    df = _weekly_baseline_with_late_spike(n_weeks=3)
+    result = district_ears(df, time_col="reported_at", timeframe="week", baseline_window=7)
+    assert len(result) == 928 * 3
