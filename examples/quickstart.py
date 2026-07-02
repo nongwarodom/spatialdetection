@@ -297,18 +297,30 @@ def main() -> None:
     print()
 
     # Multi-level: the same per-month subset also works at district grain --
-    # drill into July's outbreak (Khon Kaen, "TH40") at the finer level
-    # instead of province.
-    july_df = moving_df[moving_df["month"] == "2024-07"]
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)
-        july_district = district_hotspots(july_df, k=5, permutations=199)
-    ax = plot_hotspots(
-        july_district, province="TH40", cmap="inferno", show_labels=True, label_fontsize=6, label_color="white"
-    )
-    ax.set_title("Cases: July 2024, Khon Kaen districts, gi_zscore")
-    ax.figure.savefig("quickstart_spatiotemporal_multi_location.png", dpi=100)
-    print("Saved quickstart_spatiotemporal_multi_location.png")
+    # drill into each month's outbreak province at the finer level instead
+    # of province, one plot per month.
+    month_provinces = {
+        "2024-05": ("TH50", "Chiang Mai"),
+        "2024-06": ("TH84", "Surat Thani"),
+        "2024-07": ("TH40", "Khon Kaen"),
+    }
+    for month, (province_code, province_en) in month_provinces.items():
+        month_df = moving_df[moving_df["month"] == month]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            month_district = district_hotspots(month_df, k=5, permutations=199)
+        ax = plot_hotspots(
+            month_district,
+            province=province_code,
+            cmap="inferno",
+            show_labels=True,
+            label_fontsize=6,
+            label_color="white",
+        )
+        ax.set_title(f"Cases: {month}, {province_en} districts, gi_zscore")
+        filename = f"quickstart_spatiotemporal_multi_location_{month}.png"
+        ax.figure.savefig(filename, dpi=100)
+        print(f"Saved {filename}")
 
 
 if __name__ == "__main__":
