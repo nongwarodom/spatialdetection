@@ -321,6 +321,55 @@ def main() -> None:
         filename = f"quickstart_spatiotemporal_multi_location_{month}.png"
         ax.figure.savefig(filename, dpi=100)
         print(f"Saved {filename}")
+    print()
+
+    # 6e. Timeframe x level together: bin time_df's persistent Bangkok
+    # cluster at day/week/month grain, then aggregate each bin to both
+    # province and district level. More points per bin means a more
+    # reliable read -- day bins are thin nationwide, so this reports the
+    # top gi_zscore unit (the library's recommended signal, see the
+    # plot_hotspots docstring) rather than the noisier significance flag,
+    # which can be unstable with few points per bin. The same cluster
+    # still comes out on top at every combination here.
+    print("Top province/district by timeframe:")
+    for timeframe in ("day", "week", "month"):
+        binned = time_bin_label(time_df["reported_at"], timeframe=timeframe)
+        first_bin = sorted(binned.unique())[0]
+        bin_df = time_df[binned == first_bin]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            bin_province = province_hotspots(bin_df, value_col="cases", k=5, permutations=199)
+            bin_district = district_hotspots(bin_df, value_col="cases", k=5, permutations=199)
+        top_province = bin_province.sort_values("gi_zscore", ascending=False).iloc[0]
+        top_district = bin_district.sort_values("gi_zscore", ascending=False).iloc[0]
+        print(
+            f"  timeframe={timeframe!r} ({len(bin_df)} points in {first_bin!r}): "
+            f"province -> {top_province['province_en']!r} (z={top_province['gi_zscore']:.2f}), "
+            f"district -> {top_district['district_en']!r} (z={top_district['gi_zscore']:.2f})"
+        )
+    print()
+
+    # Plot the month-grain district result (most points per bin, so the
+    # least likely to be degenerate at this finer level), zoomed to
+    # Bangkok, to round out the province-level week plot from 6c above.
+    month_binned = time_bin_label(time_df["reported_at"], timeframe="month")
+    first_month = sorted(month_binned.unique())[0]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        first_month_district = district_hotspots(
+            time_df[month_binned == first_month], value_col="cases", k=5, permutations=199
+        )
+    ax = plot_hotspots(
+        first_month_district,
+        province="TH10",
+        cmap="plasma",
+        show_labels=True,
+        label_fontsize=6,
+        label_color="black",
+    )
+    ax.set_title(f"Cases: {first_month}, Bangkok districts, gi_zscore")
+    ax.figure.savefig("quickstart_spatiotemporal_month_district.png", dpi=100)
+    print("Saved quickstart_spatiotemporal_month_district.png")
 
 
 if __name__ == "__main__":
