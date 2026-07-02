@@ -82,6 +82,18 @@ def test_plot_level_map_show_labels_annotates_each_unit():
     }
 
 
+def test_plot_level_map_label_color_defaults_to_black():
+    ax = plot_level_map(health_zone=1, show_labels=True)
+
+    assert ax.texts[0].get_color() == "black"
+
+
+def test_plot_level_map_label_color_is_customizable():
+    ax = plot_level_map(health_zone=1, show_labels=True, label_color="white")
+
+    assert ax.texts[0].get_color() == "white"
+
+
 def _grid_with_hotspot():
     xs, ys = np.meshgrid(np.arange(10), np.arange(10))
     df = pd.DataFrame({"lon": xs.ravel().astype(float), "lat": ys.ravel().astype(float)})
@@ -210,6 +222,14 @@ def test_plot_hotspots_show_labels_annotates_each_plotted_unit():
 
     assert len(ax.texts) == 8
     assert ax.texts[0].get_fontsize() == 5
+
+
+def test_plot_hotspots_label_color_is_customizable():
+    result = province_hotspots(_nationwide_df(), k=5, permutations=49)
+
+    ax = plot_hotspots(result, health_zone=1, show_labels=True, label_color="yellow")
+
+    assert ax.texts[0].get_color() == "yellow"
 
 
 def test_plot_hotspots_show_labels_warns_for_point_level_results():

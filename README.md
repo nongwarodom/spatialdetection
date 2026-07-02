@@ -98,8 +98,10 @@ ax = plot_level_map((13.7563, 100.5018))
 
 # Customize the highlight color, and label each unit with its name
 # (mainly useful for health_zone, which highlights several provinces
-# at once -- see below).
-ax = plot_level_map(health_zone=1, color="green", show_labels=True, label_fontsize=6)
+# at once -- see below). label_color sets the label text's color.
+ax = plot_level_map(
+    health_zone=1, color="green", show_labels=True, label_fontsize=6, label_color="white"
+)
 
 # Spatiotemporal hotspot detection: bin points by day/week/month and run
 # Getis-Ord Gi* independently within each bin, so a hotspot in one period
@@ -138,8 +140,9 @@ ax = plot_hotspots(hot_provinces, health_zone=1)   # zone 1: 8 northern province
 ax = plot_hotspots(hot_districts, province="TH10")  # Bangkok's districts only
 
 # cmap picks the colormap (any matplotlib name); show_labels annotates
-# each plotted unit with its name (choropleth results only).
-ax = plot_hotspots(hot_provinces, cmap="viridis", show_labels=True, label_fontsize=6)
+# each plotted unit with its name (choropleth results only); label_color
+# sets the label text's color.
+ax = plot_hotspots(hot_provinces, cmap="viridis", show_labels=True, label_fontsize=6, label_color="black")
 
 # Plot the discrete hotspot/coldspot/not-significant flag instead of the
 # continuous gi_zscore: cmap is ignored for value_col="hotspot" in favor of
@@ -175,12 +178,13 @@ auto-plotted map, all from one plain DataFrame).
   unreliable under skewed counts (see below). Takes an optional
   `health_zone`/`province`/`district` filter (pass at most one) to restrict
   the map to one region and zoom to it, an optional `cmap` to change the
-  colormap, and `show_labels`/`label_fontsize` to annotate each plotted
-  unit with its name. Plotting `value_col="hotspot"` (the discrete flag)
-  switches to categorical coloring via `hotspot_color`/`coldspot_color`/
-  `not_significant_color` instead of `cmap`, with a matching legend.
-  `plot_level_map` similarly takes `color` (the highlighted unit's fill
-  color) and `show_labels`/`label_fontsize`.
+  colormap, and `show_labels`/`label_fontsize`/`label_color` to annotate
+  each plotted unit with its name. Plotting `value_col="hotspot"` (the
+  discrete flag) switches to categorical coloring via `hotspot_color`/
+  `coldspot_color`/`not_significant_color` instead of `cmap`, with a
+  matching legend. `plot_level_map` similarly takes `color` (the
+  highlighted unit's fill color) and `show_labels`/`label_fontsize`/
+  `label_color`.
 - `spatialdetection.health_zones` — `HEALTH_ZONE_PROVINCES` maps Thailand
   Ministry of Public Health's 13 health zones (เขตสุขภาพที่ 1-13, each a
   group of provinces; zone 13 is Bangkok alone) to their province names;

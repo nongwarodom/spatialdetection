@@ -33,7 +33,7 @@ def _boundary(level: str) -> gpd.GeoDataFrame:
     return gpd.read_file(_BOUNDARY_PATHS[level])
 
 
-def _label_units(ax: Axes, gdf: gpd.GeoDataFrame, name_col: str, fontsize: float) -> None:
+def _label_units(ax: Axes, gdf: gpd.GeoDataFrame, name_col: str, fontsize: float, color: str) -> None:
     """Annotate each polygon with its name at a point guaranteed to fall inside it."""
     geom_col = gdf.geometry.name
     for _, row in gdf.iterrows():
@@ -46,11 +46,18 @@ def _label_units(ax: Axes, gdf: gpd.GeoDataFrame, name_col: str, fontsize: float
             ha="center",
             va="center",
             fontsize=fontsize,
+            color=color,
         )
 
 
 def _plot_health_zone(
-    zone: int, ax: Axes, buffer_deg: float, color: str, show_labels: bool, label_fontsize: float
+    zone: int,
+    ax: Axes,
+    buffer_deg: float,
+    color: str,
+    show_labels: bool,
+    label_fontsize: float,
+    label_color: str,
 ) -> Axes:
     codes = set(health_zone_province_codes(zone))
     gdf = _boundary("province")
@@ -68,7 +75,7 @@ def _plot_health_zone(
     ax.set_ylim(miny - pad_y, maxy + pad_y)
 
     if show_labels:
-        _label_units(ax, in_zone, _NAME_FIELDS["province"], label_fontsize)
+        _label_units(ax, in_zone, _NAME_FIELDS["province"], label_fontsize, label_color)
 
     ax.set_title(f"Health zone {zone}: {len(in_zone)} provinces")
     ax.set_aspect("equal")
@@ -86,6 +93,7 @@ def plot_level_map(
     color: str = "orange",
     show_labels: bool = False,
     label_fontsize: float = 8,
+    label_color: str = "black",
 ) -> Axes:
     """Auto-plot a map for `value`, zoomed and styled to its detected admin level.
 
@@ -105,7 +113,8 @@ def plot_level_map(
     `show_labels=True` annotates each highlighted unit with its name; only
     meaningful for `health_zone` (multiple provinces) since a single
     province/district/subdistrict is already named in the title.
-    `label_fontsize` controls that annotation's size.
+    `label_fontsize` and `label_color` control that annotation's size and
+    text color.
     """
     given = [
         (name, v)
@@ -129,7 +138,7 @@ def plot_level_map(
         _, ax = plt.subplots(figsize=(8, 8))
 
     if name == "health_zone":
-        return _plot_health_zone(selected, ax, buffer_deg, color, show_labels, label_fontsize)
+        return _plot_health_zone(selected, ax, buffer_deg, color, show_labels, label_fontsize, label_color)
 
     result = detect_level(selected)
 
@@ -158,7 +167,7 @@ def plot_level_map(
         ax.set_ylim(miny - pad_y, maxy + pad_y)
 
         if show_labels:
-            _label_units(ax, unit, _NAME_FIELDS[result.level], label_fontsize)
+            _label_units(ax, unit, _NAME_FIELDS[result.level], label_fontsize, label_color)
 
         name = unit.iloc[0][_NAME_FIELDS[result.level]]
         ax.set_title(f"{result.level.title()}: {name} ({result.code})")
@@ -214,6 +223,7 @@ def plot_hotspots(
     cmap: str = "coolwarm",
     show_labels: bool = False,
     label_fontsize: float = 8,
+    label_color: str = "black",
     hotspot_color: str = "red",
     coldspot_color: str = "blue",
     not_significant_color: str = "whitesmoke",
@@ -251,7 +261,7 @@ def plot_hotspots(
     `show_labels=True` annotates each plotted unit with its name (choropleth
     results only -- point-level results have no admin name to show, and
     emit a warning if `show_labels` is requested for them). `label_fontsize`
-    controls that annotation's size.
+    and `label_color` control that annotation's size and text color.
     """
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 8))
@@ -317,7 +327,7 @@ def plot_hotspots(
         if level is None:
             warnings.warn("show_labels has no effect on point-level plot_hotspots results", stacklevel=2)
         else:
-            _label_units(ax, plot_gdf, _NAME_FIELDS[level], label_fontsize)
+            _label_units(ax, plot_gdf, _NAME_FIELDS[level], label_fontsize, label_color)
 
     ax.set_title(f"{level.title() if level else 'Point'}-level {value_col}")
     ax.set_aspect("equal")
