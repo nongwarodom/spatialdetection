@@ -143,6 +143,14 @@ def main() -> None:
     ax.figure.savefig("quickstart_hotspots_zone1.png", dpi=100)
     print("\nSaved quickstart_hotspots_zone1.png")
 
+    # 6c. Plot the discrete hotspot/coldspot/not-significant flag instead of
+    # the continuous gi_zscore: cmap is ignored for value_col="hotspot" in
+    # favor of three named, independently adjustable colors with a matching
+    # legend.
+    ax = plot_hotspots(province_result, value_col="hotspot", hotspot_color="crimson", coldspot_color="steelblue")
+    ax.figure.savefig("quickstart_hotspots_flag.png", dpi=100)
+    print("Saved quickstart_hotspots_flag.png")
+
 
 if __name__ == "__main__":
     main()
