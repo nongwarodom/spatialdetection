@@ -26,6 +26,7 @@ from spatialdetection import (
     dbscan_clusters,
     detect_level,
     detect_point,
+    district_hotspots,
     getis_ord_hotspots,
     morans_i,
     plot_hotspots,
@@ -100,6 +101,50 @@ def make_multi_province_outbreak() -> pd.DataFrame:
             pd.DataFrame({"lon": rng.normal(p["lon"], 0.05, size=n), "lat": rng.normal(p["lat"], 0.05, size=n)})
         )
     return pd.concat(points, ignore_index=True)
+
+
+def make_multi_province_outbreak_over_time() -> pd.DataFrame:
+    """Case points spread nationwide, with a *different* outbreak province active
+    each month over a 3-month span -- for demonstrating multi-location,
+    multi-level spatiotemporal abnormal-area detection together (the same
+    dataset lets you both track the hotspot moving month to month, and drill
+    from province down to district for a given month)."""
+    with open("data/thailand_admin_centroids.json") as f:
+        provinces = pd.DataFrame(json.load(f)["provinces"])
+    # Same central-Bangkok background provinces as make_multi_province_outbreak,
+    # chosen because they're geographically distant from all three outbreak
+    # provinces below -- keeps each month's Getis-Ord neighborhood cleanly
+    # separated instead of smoothing the outbreak's z-score into its real
+    # geographic neighbors (which also happen to be zero-count here).
+    background_codes = ["TH11", "TH12", "TH13", "TH14", "TH15", "TH16", "TH17", "TH18", "TH19"]
+    background = provinces[provinces["province_code"].isin(background_codes)]
+    month_starts = pd.to_datetime(["2024-05-01", "2024-06-01", "2024-07-01"])
+    outbreak_provinces_en = ["Chiang Mai", "Surat Thani", "Khon Kaen"]
+
+    frames = []
+    for month_start, outbreak_en in zip(month_starts, outbreak_provinces_en):
+        for _, p in background.iterrows():
+            n = rng.integers(2, 8)
+            frames.append(
+                pd.DataFrame(
+                    {
+                        "lon": rng.normal(p["lon"], 0.05, size=n),
+                        "lat": rng.normal(p["lat"], 0.05, size=n),
+                        "reported_at": month_start + pd.to_timedelta(rng.integers(0, 28, size=n), unit="D"),
+                    }
+                )
+            )
+        outbreak = provinces.loc[provinces["province_en"] == outbreak_en].iloc[0]
+        frames.append(
+            pd.DataFrame(
+                {
+                    "lon": rng.normal(outbreak["lon"], 0.05, size=60),
+                    "lat": rng.normal(outbreak["lat"], 0.05, size=60),
+                    "reported_at": month_start + pd.to_timedelta(rng.integers(0, 28, size=60), unit="D"),
+                }
+            )
+        )
+    return pd.concat(frames, ignore_index=True)
 
 
 def main() -> None:
@@ -234,7 +279,36 @@ def main() -> None:
     )
     ax.set_title(f"Cases: week {first_week}, province-level gi_zscore")
     ax.figure.savefig("quickstart_spatiotemporal_week_province.png", dpi=100)
-    print("Saved quickstart_spatiotemporal_week_province.png")
+    print("Saved quickstart_spatiotemporal_week_province.png\n")
+
+    # 6d. Multi-location: the outbreak isn't always in the same place. Bin a
+    # nationwide dataset by month, aggregate each month's points to province
+    # level separately, and watch the hotspot move -- Chiang Mai in May,
+    # Surat Thani in June, Khon Kaen in July.
+    moving_df = make_multi_province_outbreak_over_time()
+    moving_df["month"] = time_bin_label(moving_df["reported_at"], timeframe="month")
+    print("Hotspot province by month:")
+    for month in sorted(moving_df["month"].unique()):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)  # libpysal disconnected-components notice
+            month_result = province_hotspots(moving_df[moving_df["month"] == month], k=5, permutations=199)
+        hot = month_result.loc[month_result["hotspot"] == 1, "province_en"].tolist()
+        print(f"  {month}: {hot}")
+    print()
+
+    # Multi-level: the same per-month subset also works at district grain --
+    # drill into July's outbreak (Khon Kaen, "TH40") at the finer level
+    # instead of province.
+    july_df = moving_df[moving_df["month"] == "2024-07"]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        july_district = district_hotspots(july_df, k=5, permutations=199)
+    ax = plot_hotspots(
+        july_district, province="TH40", cmap="inferno", show_labels=True, label_fontsize=6, label_color="white"
+    )
+    ax.set_title("Cases: July 2024, Khon Kaen districts, gi_zscore")
+    ax.figure.savefig("quickstart_spatiotemporal_multi_location.png", dpi=100)
+    print("Saved quickstart_spatiotemporal_multi_location.png")
 
 
 if __name__ == "__main__":

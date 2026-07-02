@@ -24,6 +24,7 @@ quickstart_hotspots_zone1.png
 quickstart_hotspots_flag.png
 quickstart_spatiotemporal_week.png
 quickstart_spatiotemporal_week_province.png
+quickstart_spatiotemporal_multi_location.png
 examples/output/
 
 # Vendored raw GIS source data (large, third-party, regenerable -- see data/raw/SOURCES.md)
