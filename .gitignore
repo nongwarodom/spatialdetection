@@ -23,6 +23,7 @@ quickstart_health_zone.png
 quickstart_hotspots_zone1.png
 quickstart_hotspots_flag.png
 quickstart_spatiotemporal_*.png
+quickstart_ears_c2.png
 examples/output/
 
 # Vendored raw GIS source data (large, third-party, regenerable -- see data/raw/SOURCES.md)

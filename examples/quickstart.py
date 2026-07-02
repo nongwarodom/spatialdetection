@@ -31,6 +31,7 @@ from spatialdetection import (
     morans_i,
     plot_hotspots,
     plot_level_map,
+    province_ears,
     province_hotspots,
     spatiotemporal_hotspots,
     subdistrict_hotspots,
@@ -145,6 +146,40 @@ def make_multi_province_outbreak_over_time() -> pd.DataFrame:
                 }
             )
         )
+    return pd.concat(frames, ignore_index=True)
+
+
+def make_temporal_vs_spatial_outbreak() -> pd.DataFrame:
+    """Dense weekly case counts for 10 provinces (avoids the +-inf/sparse-data
+    EARS caveat), where one province's own history is much lower than its
+    neighbors' -- so a late rise there lands in the same range its neighbors
+    sit in *every* week (spatially unremarkable), while being a huge jump
+    from its own baseline (temporally extreme). Demonstrates why Getis-Ord
+    Gi* and EARS are complementary, not interchangeable: a unit can hide in
+    plain sight spatially while still standing out against its own history."""
+    with open("data/thailand_admin_centroids.json") as f:
+        provinces = pd.DataFrame(json.load(f)["provinces"])
+    background_codes = ["TH11", "TH12", "TH13", "TH14", "TH15", "TH16", "TH17", "TH18", "TH19"]
+    spike_code = provinces.loc[provinces["province_en"] == "Chiang Mai", "province_code"].iloc[0]
+    chosen = provinces[provinces["province_code"].isin([*background_codes, spike_code])]
+
+    weeks = pd.to_datetime("2024-01-01") + pd.to_timedelta(np.arange(10) * 7, unit="D")
+    frames = []
+    for week in weeks:
+        for _, p in chosen.iterrows():
+            if p["province_code"] == spike_code:
+                n = 20 if week == weeks[-1] else int(rng.integers(3, 6))  # low baseline, late jump
+            else:
+                n = int(rng.integers(15, 25))  # steady, already-high background every week
+            frames.append(
+                pd.DataFrame(
+                    {
+                        "lon": rng.normal(p["lon"], 0.05, size=n),
+                        "lat": rng.normal(p["lat"], 0.05, size=n),
+                        "reported_at": week,
+                    }
+                )
+            )
     return pd.concat(frames, ignore_index=True)
 
 
@@ -506,7 +541,48 @@ def main() -> None:
     )
     ax.set_title("Cases: July 2024, Khon Kaen subdistrict-level gi_zscore")
     ax.figure.savefig("quickstart_spatiotemporal_july_subdistrict.png", dpi=100)
-    print("Saved quickstart_spatiotemporal_july_subdistrict.png")
+    print("Saved quickstart_spatiotemporal_july_subdistrict.png\n")
+
+    # 7. EARS temporal anomaly detection: spatial vs. temporal are genuinely
+    # different questions. temporal_df has Chiang Mai sitting at a low,
+    # steady 3-5 cases/week for 9 weeks, then jumping to 20 in week 10 --
+    # squarely inside the range its neighbors occupy *every* week, so
+    # Getis-Ord Gi* (comparing it to those neighbors, within that one week)
+    # finds nothing remarkable. EARS (comparing that same week to Chiang
+    # Mai's own prior 9 weeks) flags it immediately.
+    temporal_df = make_temporal_vs_spatial_outbreak()
+    weeks = sorted(temporal_df["reported_at"].unique())
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # libpysal disconnected-components notice
+        spatial_final_week = province_hotspots(temporal_df[temporal_df["reported_at"] == weeks[-1]], k=5, permutations=499)
+    cm_spatial = spatial_final_week[spatial_final_week["province_en"] == "Chiang Mai"].iloc[0]
+    spatial_rank = int((spatial_final_week["gi_zscore"] > cm_spatial["gi_zscore"]).sum()) + 1
+    print(
+        f"Spatial (Getis-Ord Gi*, final week only): Chiang Mai count={cm_spatial['count']:.0f}, "
+        f"gi_zscore={cm_spatial['gi_zscore']:.2f} (rank {spatial_rank}/{len(spatial_final_week)} "
+        "by gi_zscore -- unremarkable next to its neighbors that week)"
+    )
+
+    ears_result = province_ears(temporal_df, time_col="reported_at", timeframe="week", baseline_window=7)
+    cm_temporal = ears_result[ears_result["province_en"] == "Chiang Mai"].sort_values("time_bin")
+    print("\nTemporal (EARS, Chiang Mai's own history by week):")
+    print(cm_temporal[["time_bin", "count", "c1", "c2", "c2_alert"]].to_string(index=False))
+
+    # Filter to the spike week before plotting -- province_ears stacks every
+    # week's rows into one result, like spatiotemporal_hotspots does.
+    last_week_ears = ears_result[ears_result["time_bin"] == cm_temporal["time_bin"].iloc[-1]]
+    ax = plot_hotspots(
+        last_week_ears,
+        value_col="c2",
+        health_zone=1,
+        cmap="magma",
+        show_labels=True,
+        label_fontsize=8,
+        label_color="white",
+    )
+    ax.set_title(f"Week {cm_temporal['time_bin'].iloc[-1]}: EARS c2 (vs. each province's own history)")
+    ax.figure.savefig("quickstart_ears_c2.png", dpi=100)
+    print("\nSaved quickstart_ears_c2.png")
 
 
 if __name__ == "__main__":

@@ -68,6 +68,9 @@ from spatialdetection import (
     province_hotspots,
     district_hotspots,
     subdistrict_hotspots,
+    province_ears,
+    district_ears,
+    subdistrict_ears,
 )
 
 # df is a plain DataFrame with "lon"/"lat" columns (e.g. from pd.read_csv)
@@ -148,6 +151,26 @@ ax = plot_hotspots(hot_provinces, cmap="viridis", show_labels=True, label_fontsi
 # continuous gi_zscore: cmap is ignored for value_col="hotspot" in favor of
 # three named colors (with a matching legend), each independently adjustable.
 ax = plot_hotspots(hot_provinces, value_col="hotspot", hotspot_color="red", coldspot_color="blue")
+
+# Getis-Ord Gi* (above) only compares a unit to its spatial neighbors within
+# one time period -- a province that's high everywhere around it, yet far
+# above its OWN recent weeks, won't show up there. province_ears/
+# district_ears/subdistrict_ears are the temporal counterpart: same
+# aggregation and zero-filling as *_hotspots, but bin by time_col first and
+# compare each unit's count each period against its own history (CDC's EARS
+# C1/C2/C3 historical-limits algorithms) instead of its neighbors. No k/
+# permutations/alpha -- there's no spatial weights matrix here.
+weekly_province_ears = province_ears(df, time_col="observed_at", timeframe="week")
+alerts = weekly_province_ears[weekly_province_ears["c2_alert"]]  # C2 is EARS's default algorithm
+
+# c1/c2/c3 are NaN for a unit's first baseline_window (+2 for c2/c3) periods,
+# before it has enough history to compute a baseline. c2/c3 can be +-inf when
+# the baseline is perfectly flat (zero variance) -- this is standard EARS
+# behavior, not a bug, but it means EARS on sparse, mostly-zero counts (e.g.
+# subdistrict-level or early-outbreak province data) produces alert-flooded,
+# uninformative output, same caveat as the finer *_hotspots levels below.
+# Prefer coarser levels or a longer baseline_window for thin data.
+ax = plot_hotspots(weekly_province_ears, value_col="c2")
 ```
 
 See `examples/quickstart.py` for a runnable version of this with synthetic
@@ -208,6 +231,34 @@ auto-plotted map, all from one plain DataFrame).
   test's reference distribution degenerates and p-values stop being
   meaningful — prefer `province_hotspots`/`district_hotspots` unless your
   data supports the finer grain.
+- `spatialdetection.temporal` — `ears_scores`, the purely temporal
+  counterpart to Getis-Ord Gi*: implements the CDC's EARS C1/C2/C3
+  historical-limits algorithms (Hutwagner et al. 2003), comparing each
+  unit's value only to its own past values, independent of its neighbors.
+  C1's baseline is the `baseline_window` periods immediately before the
+  current one (most reactive, but a growing outbreak leaks into its own
+  baseline); C2's baseline ends 2 periods earlier, guarding against that
+  self-contamination (EARS's standard/default algorithm); C3 sums each of
+  the current and prior 2 periods' C2 excess over 1, so it only fires on a
+  *sustained* rise across 3 consecutive periods (least sensitive, most
+  specific). All three are z-score-like and can be `±inf` when a unit's
+  baseline has zero variance — expected EARS behavior, not a bug, but a
+  sign the input is too sparse for a meaningful baseline. Takes a
+  zero-filled (time × group) panel with no gaps — `province_ears`/
+  `district_ears`/`subdistrict_ears` in `level_hotspots` build one
+  automatically and are the intended entry point; call `ears_scores`
+  directly only if you already have a custom panel.
+- `spatialdetection.level_hotspots` also has `province_ears`/
+  `district_ears`/`subdistrict_ears`: same point-level/`pcode_col`
+  aggregation and zero-filling as `province_hotspots`/`district_hotspots`/
+  `subdistrict_hotspots`, but binned by `time_col`/`timeframe`
+  (`"day"`/`"week"`/`"month"`, via `spatiotemporal.time_bin_label`) and run
+  through `ears_scores` instead of `getis_ord_hotspots` — no `k`/
+  `permutations`/`alpha`, since there's no spatial weights matrix to build.
+  Output plugs directly into `plot_hotspots` (e.g. `value_col="c2"`). Same
+  sparse-data caveat as the finer `*_hotspots` levels: EARS on mostly-zero
+  counts alerts on noise (every 0→1 change looks like `c2=inf`), so prefer
+  coarser levels or a longer `baseline_window` unless the data is dense.
 
 ## Development
 
