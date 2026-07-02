@@ -96,6 +96,11 @@ located = detect_point(pd.DataFrame({"lat": [13.7563], "lon": [100.5018]}))
 ax = plot_level_map("TH100101")
 ax = plot_level_map((13.7563, 100.5018))
 
+# Customize the highlight color, and label each unit with its name
+# (mainly useful for health_zone, which highlights several provinces
+# at once -- see below).
+ax = plot_level_map(health_zone=1, color="green", show_labels=True, label_fontsize=6)
+
 # Spatiotemporal hotspot detection: bin points by day/week/month and run
 # Getis-Ord Gi* independently within each bin, so a hotspot in one period
 # isn't diluted by activity in another.
@@ -131,6 +136,10 @@ ax = plot_hotspots(hot_provinces)
 # province_hotspots result can't be filtered by district.
 ax = plot_hotspots(hot_provinces, health_zone=1)   # zone 1: 8 northern provinces
 ax = plot_hotspots(hot_districts, province="TH10")  # Bangkok's districts only
+
+# cmap picks the colormap (any matplotlib name); show_labels annotates
+# each plotted unit with its name (choropleth results only).
+ax = plot_hotspots(hot_provinces, cmap="viridis", show_labels=True, label_fontsize=6)
 ```
 
 See `examples/quickstart.py` for a runnable version of this with synthetic
@@ -160,7 +169,10 @@ auto-plotted map, all from one plain DataFrame).
   `gi_zscore` rather than the `hotspot` flag since that flag can be
   unreliable under skewed counts (see below). Takes an optional
   `health_zone`/`province`/`district` filter (pass at most one) to restrict
-  the map to one region and zoom to it.
+  the map to one region and zoom to it, an optional `cmap` to change the
+  colormap, and `show_labels`/`label_fontsize` to annotate each plotted
+  unit with its name. `plot_level_map` similarly takes `color` (the
+  highlighted unit's fill color) and `show_labels`/`label_fontsize`.
 - `spatialdetection.health_zones` — `HEALTH_ZONE_PROVINCES` maps Thailand
   Ministry of Public Health's 13 health zones (เขตสุขภาพที่ 1-13, each a
   group of provinces; zone 13 is Bangkok alone) to their province names;

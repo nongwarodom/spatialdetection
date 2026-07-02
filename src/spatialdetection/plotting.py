@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from functools import lru_cache
 from pathlib import Path
 
@@ -31,7 +32,25 @@ def _boundary(level: str) -> gpd.GeoDataFrame:
     return gpd.read_file(_BOUNDARY_PATHS[level])
 
 
-def _plot_health_zone(zone: int, ax: Axes, buffer_deg: float) -> Axes:
+def _label_units(ax: Axes, gdf: gpd.GeoDataFrame, name_col: str, fontsize: float) -> None:
+    """Annotate each polygon with its name at a point guaranteed to fall inside it."""
+    geom_col = gdf.geometry.name
+    for _, row in gdf.iterrows():
+        if pd.isna(row[name_col]) or row[geom_col] is None:
+            continue
+        point = row[geom_col].representative_point()
+        ax.annotate(
+            str(row[name_col]),
+            xy=(point.x, point.y),
+            ha="center",
+            va="center",
+            fontsize=fontsize,
+        )
+
+
+def _plot_health_zone(
+    zone: int, ax: Axes, buffer_deg: float, color: str, show_labels: bool, label_fontsize: float
+) -> Axes:
     codes = set(health_zone_province_codes(zone))
     gdf = _boundary("province")
     in_zone = gdf[gdf[_CODE_FIELDS["province"]].isin(codes)]
@@ -39,13 +58,16 @@ def _plot_health_zone(zone: int, ax: Axes, buffer_deg: float) -> Axes:
         raise ValueError(f"no provinces found for health zone {zone!r}")
 
     gdf.plot(ax=ax, color="whitesmoke", edgecolor="lightgrey", linewidth=0.3)
-    in_zone.plot(ax=ax, color="orange", edgecolor="black", linewidth=1.0)
+    in_zone.plot(ax=ax, color=color, edgecolor="black", linewidth=1.0)
 
     minx, miny, maxx, maxy = in_zone.total_bounds
     pad_x = max((maxx - minx) * 0.1, buffer_deg / 4)
     pad_y = max((maxy - miny) * 0.1, buffer_deg / 4)
     ax.set_xlim(minx - pad_x, maxx + pad_x)
     ax.set_ylim(miny - pad_y, maxy + pad_y)
+
+    if show_labels:
+        _label_units(ax, in_zone, _NAME_FIELDS["province"], label_fontsize)
 
     ax.set_title(f"Health zone {zone}: {len(in_zone)} provinces")
     ax.set_aspect("equal")
@@ -60,6 +82,9 @@ def plot_level_map(
     province: str | None = None,
     district: str | None = None,
     subdistrict: str | None = None,
+    color: str = "orange",
+    show_labels: bool = False,
+    label_fontsize: float = 8,
 ) -> Axes:
     """Auto-plot a map for `value`, zoomed and styled to its detected admin level.
 
@@ -72,6 +97,14 @@ def plot_level_map(
     one out: it has no single P-code, so it plots every province in the zone
     highlighted together, zoomed to their combined bounds, rather than one
     unit.
+
+    `color` sets the highlighted unit's (or, for `health_zone`, all units
+    in the zone's) fill color -- any matplotlib color spec.
+
+    `show_labels=True` annotates each highlighted unit with its name; only
+    meaningful for `health_zone` (multiple provinces) since a single
+    province/district/subdistrict is already named in the title.
+    `label_fontsize` controls that annotation's size.
     """
     given = [
         (name, v)
@@ -95,7 +128,7 @@ def plot_level_map(
         _, ax = plt.subplots(figsize=(8, 8))
 
     if name == "health_zone":
-        return _plot_health_zone(selected, ax, buffer_deg)
+        return _plot_health_zone(selected, ax, buffer_deg, color, show_labels, label_fontsize)
 
     result = detect_level(selected)
 
@@ -115,13 +148,16 @@ def plot_level_map(
         if parent_level:
             _boundary(parent_level).plot(ax=ax, color="whitesmoke", edgecolor="lightgrey", linewidth=0.5)
         gdf.plot(ax=ax, color="whitesmoke", edgecolor="grey", linewidth=0.3)
-        unit.plot(ax=ax, color="orange", edgecolor="black", linewidth=1.2)
+        unit.plot(ax=ax, color=color, edgecolor="black", linewidth=1.2)
 
         minx, miny, maxx, maxy = unit.total_bounds
         pad_x = max((maxx - minx) * 0.5, buffer_deg / 4)
         pad_y = max((maxy - miny) * 0.5, buffer_deg / 4)
         ax.set_xlim(minx - pad_x, maxx + pad_x)
         ax.set_ylim(miny - pad_y, maxy + pad_y)
+
+        if show_labels:
+            _label_units(ax, unit, _NAME_FIELDS[result.level], label_fontsize)
 
         name = unit.iloc[0][_NAME_FIELDS[result.level]]
         ax.set_title(f"{result.level.title()}: {name} ({result.code})")
@@ -174,6 +210,9 @@ def plot_hotspots(
     health_zone: int | None = None,
     province: str | None = None,
     district: str | None = None,
+    cmap: str = "coolwarm",
+    show_labels: bool = False,
+    label_fontsize: float = 8,
 ) -> Axes:
     """Auto-plot Getis-Ord Gi* results, colored by `value_col` on a diverging scale centered at zero.
 
@@ -197,6 +236,14 @@ def plot_hotspots(
     its own grain or coarser -- e.g. a `district_hotspots` result can be
     filtered by `district` or `province`, but a `province_hotspots` result
     can't be filtered by `district` (there's no per-district row to keep).
+
+    `cmap` is any matplotlib colormap name (default `"coolwarm"`, a
+    diverging scale suited to values centered at zero like `gi_zscore`).
+
+    `show_labels=True` annotates each plotted unit with its name (choropleth
+    results only -- point-level results have no admin name to show, and
+    emit a warning if `show_labels` is requested for them). `label_fontsize`
+    controls that annotation's size.
     """
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 8))
@@ -232,7 +279,7 @@ def plot_hotspots(
     plot_gdf.plot(
         ax=ax,
         column=value_col,
-        cmap="coolwarm",
+        cmap=cmap,
         vmin=-vmax,
         vmax=vmax,
         legend=True,
@@ -243,6 +290,12 @@ def plot_hotspots(
 
     if region is not None:
         _zoom_to_bounds(ax, plot_gdf)
+
+    if show_labels:
+        if level is None:
+            warnings.warn("show_labels has no effect on point-level plot_hotspots results", stacklevel=2)
+        else:
+            _label_units(ax, plot_gdf, _NAME_FIELDS[level], label_fontsize)
 
     ax.set_title(f"{level.title() if level else 'Point'}-level {value_col}")
     ax.set_aspect("equal")

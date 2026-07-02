@@ -52,6 +52,35 @@ def test_plot_level_map_requires_exactly_one_selector():
         plot_level_map("TH10", province="TH11")
 
 
+def test_plot_level_map_color_recolors_highlighted_unit():
+    ax = plot_level_map("TH10", color="green")
+
+    unit_facecolor = ax.collections[-1].get_facecolor()[0]
+    assert tuple(unit_facecolor) == pytest.approx((0.0, 0.501960784313725, 0.0, 1.0))
+
+
+def test_plot_level_map_labels_off_by_default():
+    ax = plot_level_map(health_zone=1)
+    assert len(ax.texts) == 0
+
+
+def test_plot_level_map_show_labels_annotates_each_unit():
+    ax = plot_level_map(health_zone=1, show_labels=True, label_fontsize=6)
+
+    assert len(ax.texts) == 8  # one label per province in the zone
+    assert ax.texts[0].get_fontsize() == 6
+    assert {t.get_text() for t in ax.texts} == {
+        "Chiang Mai",
+        "Chiang Rai",
+        "Phrae",
+        "Nan",
+        "Phayao",
+        "Lampang",
+        "Lamphun",
+        "Mae Hong Son",
+    }
+
+
 def _grid_with_hotspot():
     xs, ys = np.meshgrid(np.arange(10), np.arange(10))
     df = pd.DataFrame({"lon": xs.ravel().astype(float), "lat": ys.ravel().astype(float)})
@@ -155,3 +184,38 @@ def test_plot_hotspots_district_filter_too_fine_for_province_level_result_raises
 
     with pytest.raises(ValueError, match="coarser than a district filter"):
         plot_hotspots(result, district="TH1001")
+
+
+def test_plot_hotspots_cmap_changes_colormap():
+    result = province_hotspots(_nationwide_df(), k=5, permutations=49)
+
+    ax = plot_hotspots(result, cmap="viridis")
+
+    assert ax.collections[0].get_cmap().name == "viridis"
+
+
+def test_plot_hotspots_labels_off_by_default():
+    result = province_hotspots(_nationwide_df(), k=5, permutations=49)
+
+    ax = plot_hotspots(result, health_zone=1)
+
+    assert len(ax.texts) == 0
+
+
+def test_plot_hotspots_show_labels_annotates_each_plotted_unit():
+    result = province_hotspots(_nationwide_df(), k=5, permutations=49)
+
+    ax = plot_hotspots(result, health_zone=1, show_labels=True, label_fontsize=5)
+
+    assert len(ax.texts) == 8
+    assert ax.texts[0].get_fontsize() == 5
+
+
+def test_plot_hotspots_show_labels_warns_for_point_level_results():
+    gdf = _grid_with_hotspot()
+    result = getis_ord_hotspots(gdf, "value", k=4, permutations=99)
+
+    with pytest.warns(UserWarning, match="show_labels has no effect"):
+        ax = plot_hotspots(result, show_labels=True)
+
+    assert len(ax.texts) == 0
