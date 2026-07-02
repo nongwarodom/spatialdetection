@@ -28,6 +28,7 @@ from spatialdetection import (
     detect_point,
     getis_ord_hotspots,
     morans_i,
+    plot_hotspots,
     plot_level_map,
     province_hotspots,
     spatiotemporal_hotspots,
@@ -107,6 +108,14 @@ def main() -> None:
     ax.figure.savefig("quickstart_map.png", dpi=100)
     print("Saved quickstart_map.png\n")
 
+    # 4b. plot_level_map also takes named health_zone/province/district/
+    # subdistrict selectors instead of a raw P-code -- health_zone is the
+    # odd one out, since a MoPH health zone is a group of provinces (not a
+    # single admin unit), so it plots and zooms to all of them together.
+    ax = plot_level_map(health_zone=1)  # zone 1: 8 northern provinces
+    ax.figure.savefig("quickstart_health_zone.png", dpi=100)
+    print("Saved quickstart_health_zone.png\n")
+
     # 5. Reverse-geocode the case locations: which subdistrict is each one in?
     located = detect_point(df)
     print("Reverse-geocoded case counts by subdistrict:")
@@ -121,6 +130,14 @@ def main() -> None:
     hot = province_result[province_result["hotspot"] == 1]
     print("Hotspot province(s):")
     print(hot[["province_en", "count", "gi_zscore", "gi_pvalue"]].to_string(index=False))
+
+    # 6b. plot_hotspots takes the same health_zone/province/district
+    # selectors to restrict the choropleth to one region and zoom to it --
+    # here, zooming into health zone 1 (the outbreak province, Chiang Mai,
+    # is in it) instead of showing the whole country.
+    ax = plot_hotspots(province_result, health_zone=1)
+    ax.figure.savefig("quickstart_hotspots_zone1.png", dpi=100)
+    print("\nSaved quickstart_hotspots_zone1.png")
 
 
 if __name__ == "__main__":

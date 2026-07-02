@@ -122,6 +122,15 @@ hot_provinces = province_hotspots(df, subdistrict_col="subdistrict_code")  # sam
 # (or a point scatter for raw getis_ord_hotspots/spatiotemporal_hotspots
 # output), colored by gi_zscore on a diverging scale centered at zero.
 ax = plot_hotspots(hot_provinces)
+
+# Zoom into one region instead of the whole country: pass at most one of
+# health_zone (1-13, MoPH's province groupings), province, or district
+# (P-code). Restricts the map to that region and zooms to its bounds. A
+# result can only be filtered at its own grain or coarser -- e.g. a
+# district_hotspots result can be filtered by district or province, but a
+# province_hotspots result can't be filtered by district.
+ax = plot_hotspots(hot_provinces, health_zone=1)   # zone 1: 8 northern provinces
+ax = plot_hotspots(hot_districts, province="TH10")  # Bangkok's districts only
 ```
 
 See `examples/quickstart.py` for a runnable version of this with synthetic
@@ -149,7 +158,14 @@ auto-plotted map, all from one plain DataFrame).
   `province_hotspots`/`district_hotspots`/`subdistrict_hotspots` result
   (choropleth for admin-level results, point scatter otherwise), colored by
   `gi_zscore` rather than the `hotspot` flag since that flag can be
-  unreliable under skewed counts (see below).
+  unreliable under skewed counts (see below). Takes an optional
+  `health_zone`/`province`/`district` filter (pass at most one) to restrict
+  the map to one region and zoom to it.
+- `spatialdetection.health_zones` — `HEALTH_ZONE_PROVINCES` maps Thailand
+  Ministry of Public Health's 13 health zones (เขตสุขภาพที่ 1-13, each a
+  group of provinces; zone 13 is Bangkok alone) to their province names;
+  `health_zone_province_codes` resolves a zone number to its province
+  P-codes.
 - `spatialdetection.spatiotemporal` — `time_bin_label` (day/week/month
   bin labels for a timestamp column) and `spatiotemporal_hotspots`
   (Getis-Ord Gi* run independently per time bin).
