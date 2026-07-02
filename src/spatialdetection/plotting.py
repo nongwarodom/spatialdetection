@@ -10,6 +10,7 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib.axes import Axes
+from matplotlib.patches import Patch
 
 from spatialdetection.detect import _LOOKUP_KEYS, _normalize_and_validate, detect_level, detect_point
 from spatialdetection.health_zones import health_zone_province_codes
@@ -213,6 +214,9 @@ def plot_hotspots(
     cmap: str = "coolwarm",
     show_labels: bool = False,
     label_fontsize: float = 8,
+    hotspot_color: str = "red",
+    coldspot_color: str = "blue",
+    not_significant_color: str = "whitesmoke",
 ) -> Axes:
     """Auto-plot Getis-Ord Gi* results, colored by `value_col` on a diverging scale centered at zero.
 
@@ -238,7 +242,11 @@ def plot_hotspots(
     can't be filtered by `district` (there's no per-district row to keep).
 
     `cmap` is any matplotlib colormap name (default `"coolwarm"`, a
-    diverging scale suited to values centered at zero like `gi_zscore`).
+    diverging scale suited to values centered at zero like `gi_zscore`) --
+    used for any continuous `value_col`. If `value_col="hotspot"` (the
+    discrete significance flag: 1/-1/0), `cmap` is ignored and each unit is
+    instead colored by category using `hotspot_color`/`coldspot_color`/
+    `not_significant_color`, with a matching legend.
 
     `show_labels=True` annotates each plotted unit with its name (choropleth
     results only -- point-level results have no admin name to show, and
@@ -275,18 +283,32 @@ def plot_hotspots(
         if plot_gdf.empty:
             raise ValueError(f"no rows fall within the selected region ({prefixes})")
 
-    vmax = plot_gdf[value_col].abs().max()
-    plot_gdf.plot(
-        ax=ax,
-        column=value_col,
-        cmap=cmap,
-        vmin=-vmax,
-        vmax=vmax,
-        legend=True,
-        edgecolor="grey",
-        linewidth=0.2,
-        missing_kwds={"color": "whitesmoke"},
-    )
+    if value_col == "hotspot":
+        category_colors = {1: hotspot_color, -1: coldspot_color, 0: not_significant_color}
+        category_labels = {1: "Hotspot", -1: "Coldspot", 0: "Not significant"}
+        plot_gdf.plot(
+            ax=ax,
+            color=plot_gdf[value_col].map(category_colors),
+            edgecolor="grey",
+            linewidth=0.2,
+        )
+        ax.legend(
+            handles=[Patch(facecolor=category_colors[c], edgecolor="grey", label=category_labels[c]) for c in (1, -1, 0)],
+            loc="lower left",
+        )
+    else:
+        vmax = plot_gdf[value_col].abs().max()
+        plot_gdf.plot(
+            ax=ax,
+            column=value_col,
+            cmap=cmap,
+            vmin=-vmax,
+            vmax=vmax,
+            legend=True,
+            edgecolor="grey",
+            linewidth=0.2,
+            missing_kwds={"color": "whitesmoke"},
+        )
 
     if region is not None:
         _zoom_to_bounds(ax, plot_gdf)

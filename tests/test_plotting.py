@@ -1,3 +1,4 @@
+import matplotlib.colors as mcolors
 import numpy as np
 import pandas as pd
 import pytest
@@ -219,3 +220,36 @@ def test_plot_hotspots_show_labels_warns_for_point_level_results():
         ax = plot_hotspots(result, show_labels=True)
 
     assert len(ax.texts) == 0
+
+
+def test_plot_hotspots_hotspot_column_uses_categorical_colors_with_legend():
+    result = province_hotspots(_nationwide_df(), k=5, permutations=49)
+
+    ax = plot_hotspots(result, value_col="hotspot")
+
+    legend_labels = {t.get_text() for t in ax.get_legend().get_texts()}
+    assert legend_labels == {"Hotspot", "Coldspot", "Not significant"}
+    # categorical coloring skips the continuous colorbar legend/cmap path
+    assert ax.collections[0].get_array() is None
+
+
+def test_plot_hotspots_hotspot_colors_are_customizable():
+    result = province_hotspots(_nationwide_df(), k=5, permutations=49)
+
+    ax = plot_hotspots(
+        result, value_col="hotspot", hotspot_color="orange", coldspot_color="navy", not_significant_color="lightgrey"
+    )
+
+    facecolors = {tuple(c) for c in ax.collections[0].get_facecolor()}
+    expected = {mcolors.to_rgba("orange"), mcolors.to_rgba("navy"), mcolors.to_rgba("lightgrey")}
+    assert facecolors <= expected
+
+
+def test_plot_hotspots_hotspot_column_works_for_point_level_results():
+    gdf = _grid_with_hotspot()
+    result = getis_ord_hotspots(gdf, "value", k=4, permutations=99)
+
+    ax = plot_hotspots(result, value_col="hotspot")
+
+    legend_labels = {t.get_text() for t in ax.get_legend().get_texts()}
+    assert legend_labels == {"Hotspot", "Coldspot", "Not significant"}
