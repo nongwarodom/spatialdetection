@@ -147,6 +147,16 @@ def make_multi_province_outbreak_over_time() -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
+def _print_top(result: pd.DataFrame, name_col: str, label: str, value_col: str = "count", n: int = 5) -> None:
+    """Print the top-n rows by gi_zscore, with the aggregated value/z-score/p-value/significance flag.
+
+    `value_col` must match whatever was passed to province_hotspots/district_hotspots
+    (defaults to "count", the row-count column used when no value_col was given there)."""
+    cols = [name_col, value_col, "gi_zscore", "gi_pvalue", "hotspot"]
+    print(f"{label} -- top {n} by gi_zscore:")
+    print(result.sort_values("gi_zscore", ascending=False).head(n)[cols].to_string(index=False))
+
+
 def main() -> None:
     df = make_sample_cases()
     print(f"{len(df)} case records (plain DataFrame, no geometry built yet)\n")
@@ -259,117 +269,154 @@ def main() -> None:
     ax = plot_hotspots(by_week[by_week["time_bin"] == first_week], cmap="plasma")
     ax.set_title(f"Cases: week {first_week} gi_zscore")
     ax.figure.savefig("quickstart_spatiotemporal_week.png", dpi=100)
-    print("Saved quickstart_spatiotemporal_week.png")
+    print("Saved quickstart_spatiotemporal_week.png\n")
 
-    # 6c. For a labeled/colored choropleth per time period, aggregate that
-    # same week's raw points to province level (province_hotspots) instead
-    # of plotting them as unlabeled points -- now show_labels/label_color
-    # apply normally, same as any other province_hotspots result.
-    first_week_df = time_df[time_bin_label(time_df["reported_at"], timeframe="week") == first_week]
+    # 6c. Timeframe detail, one block per granularity: bin time_df's
+    # persistent Bangkok cluster at day/week/month grain, aggregate that
+    # bin to both province and district level, and plot the district-level
+    # result (the finer, more informative view once there's enough data --
+    # see level_hotspots.py's degenerate-significance caveat for sparse
+    # finer levels). Kept as three separate blocks rather than a loop so
+    # each granularity's point count and result table are easy to compare
+    # side by side.
+
+    # -- Day --
+    day_binned = time_bin_label(time_df["reported_at"], timeframe="day")
+    first_day = sorted(day_binned.unique())[0]
+    day_df = time_df[day_binned == first_day]
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)  # libpysal disconnected-components notice
-        first_week_province = province_hotspots(first_week_df, value_col="cases", k=5, permutations=199)
+        day_province = province_hotspots(day_df, value_col="cases", k=5, permutations=199)
+        day_district = district_hotspots(day_df, value_col="cases", k=5, permutations=199)
+    _print_top(day_province, "province_en", f"Day {first_day!r} ({len(day_df)} points), provinces", value_col="cases")
+    _print_top(day_district, "district_en", f"Day {first_day!r}, districts", value_col="cases")
     ax = plot_hotspots(
-        first_week_province,
-        province="TH10",
-        cmap="plasma",
-        show_labels=True,
-        label_fontsize=9,
-        label_color="black",
+        day_district, province="TH10", cmap="plasma", show_labels=True, label_fontsize=6, label_color="black"
     )
-    ax.set_title(f"Cases: week {first_week}, province-level gi_zscore")
-    ax.figure.savefig("quickstart_spatiotemporal_week_province.png", dpi=100)
-    print("Saved quickstart_spatiotemporal_week_province.png\n")
+    ax.set_title(f"Cases: {first_day}, Bangkok districts, gi_zscore")
+    ax.figure.savefig("quickstart_spatiotemporal_day_district.png", dpi=100)
+    print("Saved quickstart_spatiotemporal_day_district.png\n")
 
-    # 6d. Multi-location: the outbreak isn't always in the same place. Bin a
-    # nationwide dataset by month, aggregate each month's points to province
-    # level separately, and watch the hotspot move -- Chiang Mai in May,
-    # Surat Thani in June, Khon Kaen in July.
-    moving_df = make_multi_province_outbreak_over_time()
-    moving_df["month"] = time_bin_label(moving_df["reported_at"], timeframe="month")
-    print("Hotspot province by month:")
-    for month in sorted(moving_df["month"].unique()):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)  # libpysal disconnected-components notice
-            month_result = province_hotspots(moving_df[moving_df["month"] == month], k=5, permutations=199)
-        hot = month_result.loc[month_result["hotspot"] == 1, "province_en"].tolist()
-        print(f"  {month}: {hot}")
-    print()
-
-    # Multi-level: the same per-month subset also works at district grain --
-    # drill into each month's outbreak province at the finer level instead
-    # of province, one plot per month.
-    month_provinces = {
-        "2024-05": ("TH50", "Chiang Mai"),
-        "2024-06": ("TH84", "Surat Thani"),
-        "2024-07": ("TH40", "Khon Kaen"),
-    }
-    for month, (province_code, province_en) in month_provinces.items():
-        month_df = moving_df[moving_df["month"] == month]
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)
-            month_district = district_hotspots(month_df, k=5, permutations=199)
-        ax = plot_hotspots(
-            month_district,
-            province=province_code,
-            cmap="inferno",
-            show_labels=True,
-            label_fontsize=6,
-            label_color="white",
-        )
-        ax.set_title(f"Cases: {month}, {province_en} districts, gi_zscore")
-        filename = f"quickstart_spatiotemporal_multi_location_{month}.png"
-        ax.figure.savefig(filename, dpi=100)
-        print(f"Saved {filename}")
-    print()
-
-    # 6e. Timeframe x level together: bin time_df's persistent Bangkok
-    # cluster at day/week/month grain, then aggregate each bin to both
-    # province and district level. More points per bin means a more
-    # reliable read -- day bins are thin nationwide, so this reports the
-    # top gi_zscore unit (the library's recommended signal, see the
-    # plot_hotspots docstring) rather than the noisier significance flag,
-    # which can be unstable with few points per bin. The same cluster
-    # still comes out on top at every combination here.
-    print("Top province/district by timeframe:")
-    for timeframe in ("day", "week", "month"):
-        binned = time_bin_label(time_df["reported_at"], timeframe=timeframe)
-        first_bin = sorted(binned.unique())[0]
-        bin_df = time_df[binned == first_bin]
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)
-            bin_province = province_hotspots(bin_df, value_col="cases", k=5, permutations=199)
-            bin_district = district_hotspots(bin_df, value_col="cases", k=5, permutations=199)
-        top_province = bin_province.sort_values("gi_zscore", ascending=False).iloc[0]
-        top_district = bin_district.sort_values("gi_zscore", ascending=False).iloc[0]
-        print(
-            f"  timeframe={timeframe!r} ({len(bin_df)} points in {first_bin!r}): "
-            f"province -> {top_province['province_en']!r} (z={top_province['gi_zscore']:.2f}), "
-            f"district -> {top_district['district_en']!r} (z={top_district['gi_zscore']:.2f})"
-        )
-    print()
-
-    # Plot the month-grain district result (most points per bin, so the
-    # least likely to be degenerate at this finer level), zoomed to
-    # Bangkok, to round out the province-level week plot from 6c above.
-    month_binned = time_bin_label(time_df["reported_at"], timeframe="month")
-    first_month = sorted(month_binned.unique())[0]
+    # -- Week --
+    week_binned = time_bin_label(time_df["reported_at"], timeframe="week")
+    first_week_2 = sorted(week_binned.unique())[0]
+    week_df = time_df[week_binned == first_week_2]
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
-        first_month_district = district_hotspots(
-            time_df[month_binned == first_month], value_col="cases", k=5, permutations=199
-        )
+        week_province = province_hotspots(week_df, value_col="cases", k=5, permutations=199)
+        week_district = district_hotspots(week_df, value_col="cases", k=5, permutations=199)
+    _print_top(week_province, "province_en", f"Week {first_week_2!r} ({len(week_df)} points), provinces", value_col="cases")
+    _print_top(week_district, "district_en", f"Week {first_week_2!r}, districts", value_col="cases")
     ax = plot_hotspots(
-        first_month_district,
-        province="TH10",
-        cmap="plasma",
-        show_labels=True,
-        label_fontsize=6,
-        label_color="black",
+        week_province, province="TH10", cmap="plasma", show_labels=True, label_fontsize=9, label_color="black"
+    )
+    ax.set_title(f"Cases: week {first_week_2}, province-level gi_zscore")
+    ax.figure.savefig("quickstart_spatiotemporal_week_province.png", dpi=100)
+    print("Saved quickstart_spatiotemporal_week_province.png")
+    ax = plot_hotspots(
+        week_district, province="TH10", cmap="plasma", show_labels=True, label_fontsize=6, label_color="black"
+    )
+    ax.set_title(f"Cases: week {first_week_2}, Bangkok districts, gi_zscore")
+    ax.figure.savefig("quickstart_spatiotemporal_week_district.png", dpi=100)
+    print("Saved quickstart_spatiotemporal_week_district.png\n")
+
+    # -- Month --
+    month_binned = time_bin_label(time_df["reported_at"], timeframe="month")
+    first_month = sorted(month_binned.unique())[0]
+    month_df_bangkok = time_df[month_binned == first_month]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        month_province = province_hotspots(month_df_bangkok, value_col="cases", k=5, permutations=199)
+        month_district = district_hotspots(month_df_bangkok, value_col="cases", k=5, permutations=199)
+    _print_top(month_province, "province_en", f"Month {first_month!r} ({len(month_df_bangkok)} points), provinces", value_col="cases")
+    _print_top(month_district, "district_en", f"Month {first_month!r}, districts", value_col="cases")
+    ax = plot_hotspots(
+        month_province, province="TH10", cmap="plasma", show_labels=True, label_fontsize=9, label_color="black"
+    )
+    ax.set_title(f"Cases: {first_month}, province-level gi_zscore")
+    ax.figure.savefig("quickstart_spatiotemporal_month_province.png", dpi=100)
+    print("Saved quickstart_spatiotemporal_month_province.png")
+    ax = plot_hotspots(
+        month_district, province="TH10", cmap="plasma", show_labels=True, label_fontsize=6, label_color="black"
     )
     ax.set_title(f"Cases: {first_month}, Bangkok districts, gi_zscore")
     ax.figure.savefig("quickstart_spatiotemporal_month_district.png", dpi=100)
-    print("Saved quickstart_spatiotemporal_month_district.png")
+    print("Saved quickstart_spatiotemporal_month_district.png\n")
+
+    # 6d. Multi-location detail, one block per outbreak: the outbreak isn't
+    # always in the same place or time. moving_df has a *different* outbreak
+    # province active each month -- Chiang Mai in May, Surat Thani in June,
+    # Khon Kaen in July, against the same central-Bangkok background used in
+    # make_multi_province_outbreak (see that function for why: keeps each
+    # month's Getis-Ord neighborhood cleanly separated from the outbreak's
+    # real, zero-count geographic neighbors). Each block below prints the
+    # detailed province and district tables and plots both levels, zoomed
+    # to that month's outbreak province.
+    moving_df = make_multi_province_outbreak_over_time()
+    moving_df["month"] = time_bin_label(moving_df["reported_at"], timeframe="month")
+
+    # -- May: Chiang Mai --
+    may_df = moving_df[moving_df["month"] == "2024-05"]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        may_province = province_hotspots(may_df, k=5, permutations=199)
+        may_district = district_hotspots(may_df, k=5, permutations=199)
+    _print_top(may_province, "province_en", "May 2024 (expect Chiang Mai), provinces")
+    _print_top(may_district, "district_en", "May 2024, Chiang Mai districts")
+    ax = plot_hotspots(
+        may_province, province="TH50", cmap="viridis", show_labels=True, label_fontsize=8, label_color="black"
+    )
+    ax.set_title("Cases: May 2024, Chiang Mai province-level gi_zscore")
+    ax.figure.savefig("quickstart_spatiotemporal_may_province.png", dpi=100)
+    print("Saved quickstart_spatiotemporal_may_province.png")
+    ax = plot_hotspots(
+        may_district, province="TH50", cmap="inferno", show_labels=True, label_fontsize=6, label_color="white"
+    )
+    ax.set_title("Cases: May 2024, Chiang Mai districts, gi_zscore")
+    ax.figure.savefig("quickstart_spatiotemporal_may_district.png", dpi=100)
+    print("Saved quickstart_spatiotemporal_may_district.png\n")
+
+    # -- June: Surat Thani --
+    june_df = moving_df[moving_df["month"] == "2024-06"]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        june_province = province_hotspots(june_df, k=5, permutations=199)
+        june_district = district_hotspots(june_df, k=5, permutations=199)
+    _print_top(june_province, "province_en", "June 2024 (expect Surat Thani), provinces")
+    _print_top(june_district, "district_en", "June 2024, Surat Thani districts")
+    ax = plot_hotspots(
+        june_province, province="TH84", cmap="viridis", show_labels=True, label_fontsize=8, label_color="black"
+    )
+    ax.set_title("Cases: June 2024, Surat Thani province-level gi_zscore")
+    ax.figure.savefig("quickstart_spatiotemporal_june_province.png", dpi=100)
+    print("Saved quickstart_spatiotemporal_june_province.png")
+    ax = plot_hotspots(
+        june_district, province="TH84", cmap="inferno", show_labels=True, label_fontsize=6, label_color="white"
+    )
+    ax.set_title("Cases: June 2024, Surat Thani districts, gi_zscore")
+    ax.figure.savefig("quickstart_spatiotemporal_june_district.png", dpi=100)
+    print("Saved quickstart_spatiotemporal_june_district.png\n")
+
+    # -- July: Khon Kaen --
+    july_df = moving_df[moving_df["month"] == "2024-07"]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        july_province = province_hotspots(july_df, k=5, permutations=199)
+        july_district = district_hotspots(july_df, k=5, permutations=199)
+    _print_top(july_province, "province_en", "July 2024 (expect Khon Kaen), provinces")
+    _print_top(july_district, "district_en", "July 2024, Khon Kaen districts")
+    ax = plot_hotspots(
+        july_province, province="TH40", cmap="viridis", show_labels=True, label_fontsize=8, label_color="black"
+    )
+    ax.set_title("Cases: July 2024, Khon Kaen province-level gi_zscore")
+    ax.figure.savefig("quickstart_spatiotemporal_july_province.png", dpi=100)
+    print("Saved quickstart_spatiotemporal_july_province.png")
+    ax = plot_hotspots(
+        july_district, province="TH40", cmap="inferno", show_labels=True, label_fontsize=6, label_color="white"
+    )
+    ax.set_title("Cases: July 2024, Khon Kaen districts, gi_zscore")
+    ax.figure.savefig("quickstart_spatiotemporal_july_district.png", dpi=100)
+    print("Saved quickstart_spatiotemporal_july_district.png")
 
 
 if __name__ == "__main__":
