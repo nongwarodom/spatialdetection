@@ -59,6 +59,31 @@ def make_sample_cases() -> pd.DataFrame:
     return df
 
 
+def make_sample_cases_over_weeks() -> pd.DataFrame:
+    """Same tight-cluster-plus-background shape as make_sample_cases, but spread over
+    9 weeks (not 5 days) with enough daily volume for day/week/month timeframe binning
+    to each have enough points per bin (see spatiotemporal_hotspots's k+1-per-bin floor)."""
+    n_days = 63
+    cluster = pd.DataFrame(
+        {
+            "lon": rng.normal(100.50, 0.01, size=n_days * 8),
+            "lat": rng.normal(13.75, 0.01, size=n_days * 8),
+            "cases": rng.poisson(8, size=n_days * 8),
+        }
+    )
+    background = pd.DataFrame(
+        {
+            "lon": rng.uniform(100.3, 100.7, size=n_days * 8),
+            "lat": rng.uniform(13.6, 13.9, size=n_days * 8),
+            "cases": rng.poisson(1, size=n_days * 8),
+        }
+    )
+    df = pd.concat([cluster, background], ignore_index=True)
+    days = pd.to_datetime("2024-05-01") + pd.to_timedelta(rng.integers(0, n_days, size=len(df)), unit="D")
+    df["reported_at"] = days
+    return df
+
+
 def make_multi_province_outbreak() -> pd.DataFrame:
     """Case points spread across several provinces, with one outbreak province."""
     with open("data/thailand_admin_centroids.json") as f:
@@ -100,6 +125,37 @@ def main() -> None:
     )
     print("Hotspot points per day:")
     print(by_day.groupby("time_bin")["hotspot"].apply(lambda s: (s == 1).sum()).to_string(), "\n")
+
+    # 3b. Same abnormal-area detection at different temporal granularities:
+    # timeframe="day"/"week"/"month" all find the same persistent spatial
+    # cluster, just binned differently in time. Finer bins (day) resolve
+    # short-lived signals more precisely but need more points per bin to
+    # avoid being skipped (see the k+1-per-bin floor); coarser bins (month)
+    # need less data density but blur together anything that moves within
+    # a bin.
+    time_df = make_sample_cases_over_weeks()
+    for timeframe in ("day", "week", "month"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)  # sparse-bin skip notice
+            by_timeframe = spatiotemporal_hotspots(
+                time_df, time_col="reported_at", value_col="cases", timeframe=timeframe, k=5, permutations=199
+            )
+        n_bins = by_timeframe["time_bin"].nunique()
+        n_hot = (by_timeframe["hotspot"] == 1).sum()
+        print(f"timeframe={timeframe!r}: {n_bins} bin(s) covered, {n_hot} hotspot point-observation(s)")
+    print()
+
+    # spatiotemporal_hotspots stacks every bin's points into one
+    # GeoDataFrame, so filter to a single time_bin before plotting a
+    # readable map -- here, the first week's cluster.
+    by_week = spatiotemporal_hotspots(
+        time_df, time_col="reported_at", value_col="cases", timeframe="week", k=5, permutations=199
+    )
+    first_week = sorted(by_week["time_bin"].unique())[0]
+    ax = plot_hotspots(by_week[by_week["time_bin"] == first_week])
+    ax.set_title(f"Cases: week {first_week} gi_zscore")
+    ax.figure.savefig("quickstart_spatiotemporal_week.png", dpi=100)
+    print("Saved quickstart_spatiotemporal_week.png\n")
 
     # 4. Detect a Thai admin level and auto-plot it
     result = detect_level("TH10")  # Bangkok province P-code
