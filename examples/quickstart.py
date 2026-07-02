@@ -29,13 +29,17 @@ from spatialdetection import (
     district_ears,
     district_hotspots,
     getis_ord_hotspots,
+    knn_weights,
     morans_i,
     plot_hotspots,
     plot_level_map,
     province_ears,
     province_hotspots,
+    province_spatial_ears,
     spatiotemporal_hotspots,
+    subdistrict_ears,
     subdistrict_hotspots,
+    subdistrict_spatial_ears,
     time_bin_label,
 )
 
@@ -182,6 +186,92 @@ def make_dense_temporal_outbreak(
                         "lon": rng.normal(p["lon"], 0.05, size=n),
                         "lat": rng.normal(p["lat"], 0.05, size=n),
                         "reported_at": period_start,
+                    }
+                )
+            )
+    return pd.concat(frames, ignore_index=True)
+
+
+def make_sparse_subdistrict_with_comparable_neighbors(
+    target_subdistrict_en: str = "Si Phum", n_weeks: int = 10
+) -> tuple[pd.DataFrame, str]:
+    """A target subdistrict with exactly zero cases every week but the last
+    (forces plain EARS's zero-variance +-inf case), inside a district whose
+    other subdistricts -- the target's real geographic k-NN neighbors, since
+    they're all close together -- carry a low but nonzero, comparable rate
+    every week. Demonstrates spatial_ears_scores's intended regime: the
+    target's own history alone is unusable, but its neighbors sit at a
+    similar (low) rate, not a different one. Uses its own rng (not the
+    shared module-level one) seeded fresh: this scenario's "target is
+    exactly zero" claim depends on jittered points never crossing into a
+    neighboring subdistrict's polygon, which is sensitive to exactly which
+    random draws land where -- reusing the shared rng would make that
+    depend on how many draws every earlier section in this script already
+    consumed."""
+    local_rng = np.random.default_rng(42)
+    with open("data/thailand_admin_centroids.json") as f:
+        data = json.load(f)
+    subdistricts = pd.DataFrame(data["subdistricts"])
+    districts = pd.DataFrame(data["districts"])
+    mueang_chiang_mai = districts.loc[districts["district_en"] == "Mueang Chiang Mai"].iloc[0]
+    same_district = subdistricts[subdistricts["district_code"] == mueang_chiang_mai["district_code"]]
+    target = same_district.loc[same_district["subdistrict_en"] == target_subdistrict_en].iloc[0]
+
+    weeks = pd.to_datetime("2024-01-01") + pd.to_timedelta(np.arange(n_weeks) * 7, unit="D")
+    frames = []
+    for i, week in enumerate(weeks):
+        for _, s in same_district.iterrows():
+            if s["subdistrict_code"] == target["subdistrict_code"]:
+                n = 8 if i == len(weeks) - 1 else 0
+            else:
+                n = local_rng.poisson(0.5)
+            if n == 0:
+                continue
+            frames.append(
+                pd.DataFrame(
+                    {
+                        "lon": local_rng.normal(s["lon"], 0.002, size=n),
+                        "lat": local_rng.normal(s["lat"], 0.002, size=n),
+                        "reported_at": week,
+                    }
+                )
+            )
+    return pd.concat(frames, ignore_index=True), target["subdistrict_code"]
+
+
+def make_province_vs_real_neighbors_at_different_level(
+    target_en: str, target_range: tuple[int, int], neighbor_range: tuple[int, int], spike_n: int, n_weeks: int = 10
+) -> pd.DataFrame:
+    """Target province kept at target_range every week but the last (spikes
+    to spike_n), surrounded by its REAL geographic k=5 nearest neighbor
+    provinces (not an arbitrary background set) held at a steady, much
+    higher neighbor_range every week. Demonstrates the failure mode
+    spatial_ears_scores's docstring warns about: pooling assumes
+    exchangeable neighbors, and can mask a real spike when they aren't.
+    Own rng, same reasoning as make_sparse_subdistrict_with_comparable_neighbors."""
+    local_rng = np.random.default_rng(7)
+    with open("data/thailand_admin_centroids.json") as f:
+        provinces = pd.DataFrame(json.load(f)["provinces"])
+    target = provinces.loc[provinces["province_en"] == target_en].iloc[0]
+    w = knn_weights(provinces, k=5, lon_col="lon", lat_col="lat")
+    target_idx = provinces.index.get_loc(provinces[provinces["province_en"] == target_en].index[0])
+    neighbor_codes = provinces.iloc[w.neighbors[target_idx]]["province_code"].tolist()
+    chosen = provinces[provinces["province_code"].isin([*neighbor_codes, target["province_code"]])]
+
+    weeks = pd.to_datetime("2024-01-01") + pd.to_timedelta(np.arange(n_weeks) * 7, unit="D")
+    frames = []
+    for i, week in enumerate(weeks):
+        for _, p in chosen.iterrows():
+            if p["province_code"] == target["province_code"]:
+                n = spike_n if i == len(weeks) - 1 else int(local_rng.integers(*target_range))
+            else:
+                n = int(local_rng.integers(*neighbor_range))
+            frames.append(
+                pd.DataFrame(
+                    {
+                        "lon": local_rng.normal(p["lon"], 0.05, size=n),
+                        "lat": local_rng.normal(p["lat"], 0.05, size=n),
+                        "reported_at": week,
                     }
                 )
             )
@@ -658,11 +748,85 @@ def main() -> None:
     ax.figure.savefig("quickstart_ears_month.png", dpi=100)
     print("Saved quickstart_ears_month.png")
 
-    # subdistrict_ears is intentionally not demoed here: at subdistrict
-    # grain most units sit at 0-1 cases per period, so the baseline is
-    # usually zero-variance and c2/c3 collapse into +-inf noise rather than
-    # a meaningful signal -- see the sparse-data caveat in the README and
-    # spatialdetection.temporal's module docstring.
+    # subdistrict_ears alone isn't demoed above: at subdistrict grain most
+    # units sit at 0-1 cases per period, so the baseline is usually
+    # zero-variance and c2/c3 collapse into +-inf noise rather than a
+    # meaningful signal -- see the sparse-data caveat in the README and
+    # spatialdetection.temporal's module docstring. Section 8 below is the
+    # fix for exactly that case, and its limit.
+
+    # 8. Spatially-smoothed EARS baseline: subdistrict_spatial_ears pools a
+    # unit's k nearest neighbors' history into its baseline, alongside its
+    # own -- when it helps, and when it backfires.
+
+    # -- When it helps: a subdistrict with NO history of its own (0 every
+    # week but the last) inside a cluster of subdistricts at a comparably
+    # low, nonzero rate. Plain subdistrict_ears can't build any baseline
+    # (zero variance -> c2 = +-inf); pooling its neighbors' history in gives
+    # a real, usable number instead. --
+    sparse_df, target_subdistrict_code = make_sparse_subdistrict_with_comparable_neighbors()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # libpysal disconnected-components notice
+        plain_subdistrict = subdistrict_ears(sparse_df, time_col="reported_at", timeframe="week", baseline_window=7)
+        pooled_subdistrict = subdistrict_spatial_ears(
+            sparse_df, time_col="reported_at", timeframe="week", baseline_window=7, k=5
+        )
+    plain_target = plain_subdistrict[plain_subdistrict["subdistrict_code"] == target_subdistrict_code].sort_values("time_bin")
+    pooled_target = pooled_subdistrict[pooled_subdistrict["subdistrict_code"] == target_subdistrict_code].sort_values("time_bin")
+    print(f"Si Phum (own history only): last-week c2 = {plain_target.iloc[-1]['c2']} (uninformative)")
+    print(
+        f"Si Phum (pooled with k=5 nearby subdistricts): last-week c2 = {pooled_target.iloc[-1]['c2']:.2f}, "
+        f"alert = {pooled_target.iloc[-1]['c2_alert']}"
+    )
+    print(f"  earlier (genuinely quiet) weeks falsely alert: {bool(pooled_target.iloc[:-1]['c2_alert'].any())}\n")
+
+    last_week_label = pooled_target["time_bin"].iloc[-1]
+    ax = plot_hotspots(
+        pooled_subdistrict[pooled_subdistrict["time_bin"] == last_week_label],
+        value_col="c2",
+        district="TH5001",  # Mueang Chiang Mai
+        cmap="magma",
+        show_labels=True,
+        label_fontsize=7,
+        label_color="white",
+    )
+    ax.set_title(f"Week {last_week_label}: Mueang Chiang Mai subdistricts, pooled EARS c2")
+    ax.figure.savefig("quickstart_spatial_ears_rescue.png", dpi=100)
+    print("Saved quickstart_spatial_ears_rescue.png\n")
+
+    # -- When it backfires: a province held low (3-5/week) next to its REAL
+    # geographic nearest neighbors -- not an arbitrary "background" set --
+    # held steady at a much higher rate (18-22/week). A spike that merely
+    # reaches the neighbors' everyday level gets averaged into the pooled
+    # baseline instead of standing out: plain EARS catches it, pooled EARS
+    # doesn't. This is why spatial_ears_scores documents an exchangeability
+    # assumption instead of being a strict improvement on plain EARS. --
+    different_level_df = make_province_vs_real_neighbors_at_different_level(
+        "Chiang Mai", target_range=(3, 6), neighbor_range=(18, 23), spike_n=20
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        plain_province = province_ears(different_level_df, time_col="reported_at", timeframe="week", baseline_window=7)
+        pooled_province = province_spatial_ears(
+            different_level_df, time_col="reported_at", timeframe="week", baseline_window=7, k=5
+        )
+    plain_last = plain_province[plain_province["province_en"] == "Chiang Mai"].sort_values("time_bin").iloc[-1]
+    pooled_last = pooled_province[pooled_province["province_en"] == "Chiang Mai"].sort_values("time_bin").iloc[-1]
+    print(f"Chiang Mai vs. its own history only: c2 = {plain_last['c2']:.2f}, alert = {plain_last['c2_alert']}")
+    print(
+        f"Chiang Mai pooled with its real (much busier) neighbors: c2 = {pooled_last['c2']:.2f}, "
+        f"alert = {pooled_last['c2_alert']} -- masked by neighbors at a different level"
+    )
+
+    # The other half of the failure mode: pooling doesn't just hide spikes,
+    # it can manufacture a false low-side signal on Chiang Mai's ordinary
+    # weeks too, since the pooled mean now sits well above Chiang Mai's own
+    # everyday rate.
+    pooled_normal_week = pooled_province[pooled_province["province_en"] == "Chiang Mai"].sort_values("time_bin").iloc[-2]
+    print(
+        f"Chiang Mai, an entirely ordinary earlier week (count={pooled_normal_week['count']:.0f}): "
+        f"pooled c1 = {pooled_normal_week['c1']:.2f} -- looks artificially low against the neighbors' inflated baseline"
+    )
 
 
 if __name__ == "__main__":

@@ -71,6 +71,9 @@ from spatialdetection import (
     province_ears,
     district_ears,
     subdistrict_ears,
+    province_spatial_ears,
+    district_spatial_ears,
+    subdistrict_spatial_ears,
 )
 
 # df is a plain DataFrame with "lon"/"lat" columns (e.g. from pd.read_csv)
@@ -176,12 +179,35 @@ alerts = weekly_province_ears[weekly_province_ears["c2_alert"]]  # C2 is EARS's 
 # plotting a readable map.
 latest_bin = weekly_province_ears["time_bin"].max()
 ax = plot_hotspots(weekly_province_ears[weekly_province_ears["time_bin"] == latest_bin], value_col="c2")
+
+# province_spatial_ears/district_spatial_ears/subdistrict_spatial_ears widen
+# the *_ears baseline itself: each unit's mean/std pools in its k nearest
+# neighbors' history alongside its own, instead of relying on that one
+# unit's history alone. This is what actually fixes the +-inf case above --
+# a subdistrict whose own counts are mostly zero usually still gets a
+# workable baseline once nearby subdistricts' history is pooled in. The
+# value being tested is still purely the unit's own current count; only the
+# baseline is widened.
+sparse_subdistrict_ears = subdistrict_spatial_ears(df, time_col="observed_at", timeframe="week", k=5)
+
+# IMPORTANT: pooling assumes the unit and its k neighbors are exchangeable
+# (same underlying rate). It only helps when that holds -- a unit that's
+# sparse *and* sits next to comparably-low neighbors. If a unit's real
+# neighbors sit at a genuinely different level (e.g. a quiet subdistrict
+# next to a busy one), pooling can backfire: it can fully mask a real spike
+# that merely reaches the neighbors' everyday level (no alert where plain
+# *_ears would have caught it), or manufacture a false low-side signal on
+# the unit's own ordinary periods (they look artificially low against an
+# inflated pooled mean). It's not just "less specific" than plain *_ears --
+# it can flip the result. Cross-check against province_ears/district_ears/
+# subdistrict_ears (no pooling) when in doubt, especially for units whose
+# neighbors are visibly a different size/density.
 ```
 
 See `examples/quickstart.py` for a runnable version of this with synthetic
 data (DBSCAN, Moran's I, Getis-Ord Gi*, spatiotemporal hotspots, EARS
-temporal anomaly detection at day/week/month grain, and an auto-plotted
-map, all from one plain DataFrame).
+temporal anomaly detection at day/week/month grain, spatially-smoothed
+EARS, and an auto-plotted map, all from one plain DataFrame).
 
 ## Modules
 
@@ -253,7 +279,20 @@ map, all from one plain DataFrame).
   zero-filled (time × group) panel with no gaps — `province_ears`/
   `district_ears`/`subdistrict_ears` in `level_hotspots` build one
   automatically and are the intended entry point; call `ears_scores`
-  directly only if you already have a custom panel.
+  directly only if you already have a custom panel. `spatial_ears_scores`
+  is a spatially-smoothed variant: each unit's baseline mean/std pools in
+  its `k` nearest spatial neighbors' history alongside its own (found via
+  the same KNN machinery as `getis_ord_hotspots`), which rescues the
+  `±inf`/zero-variance case above when a unit's own history alone is too
+  thin. The value being compared is still the unit's own current value —
+  only the baseline is widened. **This assumes the unit and its neighbors
+  are exchangeable (comparable underlying rate).** When they aren't —
+  neighbors sitting at a genuinely different level — pooling can mask a
+  real spike (it merely reaches the neighbors' everyday level, so no
+  alert) or manufacture a false low-side signal (the unit's own normal
+  periods look low against an inflated pooled mean); it's not just a loss
+  of specificity, it can invert the result. Neighbors are unweighted
+  (equal contribution within the k-NN set, not distance-decayed).
 - `spatialdetection.level_hotspots` also has `province_ears`/
   `district_ears`/`subdistrict_ears`: same point-level/`pcode_col`
   aggregation and zero-filling as `province_hotspots`/`district_hotspots`/
@@ -264,7 +303,11 @@ map, all from one plain DataFrame).
   Output plugs directly into `plot_hotspots` (e.g. `value_col="c2"`). Same
   sparse-data caveat as the finer `*_hotspots` levels: EARS on mostly-zero
   counts alerts on noise (every 0→1 change looks like `c2=inf`), so prefer
-  coarser levels or a longer `baseline_window` unless the data is dense.
+  coarser levels or a longer `baseline_window` unless the data is dense —
+  or use `province_spatial_ears`/`district_spatial_ears`/
+  `subdistrict_spatial_ears`, the same aggregation run through
+  `spatial_ears_scores` instead (adds a `k` param, default 5; see the
+  exchangeability caveat above before trusting it over plain `*_ears`).
 
 ## Development
 
